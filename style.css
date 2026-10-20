@@ -144,5 +144,41 @@ button.big { width: 100%; padding: 16px; font-size: 18px; font-weight: 700; marg
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast.error { background: var(--danger); }
 
+/* ───── 과제 목록 (교사·학생 공용) ───── */
+.task-list { display: grid; gap: 12px; margin-top: 16px; text-align: left; }
+.task-item {
+  border: 1.5px solid var(--line); border-radius: 14px; padding: 16px;
+  display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center;
+  text-decoration: none; color: var(--ink); background: #fff; transition: border-color .15s, transform .05s;
+}
+a.task-item:hover { border-color: var(--forest-500); }
+a.task-item:active { transform: translateY(1px); }
+.task-item.closed { opacity: .6; }
+.task-item .task-title { font-size: 17px; font-weight: 700; color: var(--forest-900); margin-top: 6px; }
+.task-item .task-meta { font-size: 13px; color: var(--ink-soft); margin-top: 2px; }
+.task-item .task-go { color: var(--forest-700); font-weight: 700; font-size: 14px; white-space: nowrap; }
+.task-item .btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.badge.genre { background: var(--sun); color: #5a4300; }
+.badge.extra { background: #ede7f6; color: #4a2c8a; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.prompt-box {
+  background: var(--forest-100); border-left: 4px solid var(--forest-500); border-radius: 10px;
+  padding: 14px 16px; margin: 12px 0; white-space: pre-wrap; line-height: 1.8; font-size: 16px;
+}
+
+/* ───── 평가 기준 편집기 ───── */
+.crit-list { display: grid; gap: 10px; }
+.crit-item { border: 1.5px solid var(--line); border-radius: 14px; background: #fff; }
+.crit-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; flex-wrap: wrap; }
+.crit-head .crit-name { font-weight: 700; color: var(--forest-900); }
+.crit-head .crit-preview { flex: 1; color: var(--ink-soft); font-size: 12px; min-width: 120px; }
+.crit-head button { margin-left: auto; }
+.crit-body { padding: 0 14px 14px; border-top: 1px dashed var(--line); }
+.level-row { display: grid; grid-template-columns: 56px 1fr; gap: 8px; align-items: start; margin-bottom: 8px; }
+.level-row .level-no { font-size: 12px; font-weight: 700; color: var(--forest-700); padding-top: 12px; }
+.level-row textarea { font-size: 14px; padding: 10px 12px; }
+@media (max-width: 480px) { .level-row { grid-template-columns: 1fr; } .level-row .level-no { padding-top: 0; } }
+
 .muted { color: var(--ink-soft); font-size: 13px; }
 .center { text-align: center; }

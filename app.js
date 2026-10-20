@@ -2,6 +2,9 @@
  * 글숲 (geulsup) — 학생 글쓰기 AI 피드백 앱 · 화면 로직
  * © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
  *
+ * v0.2.0 — 2단계: 과제 만들기
+ *   - 교사: 학급별 과제 목록 · 과제 만들기/수정(갈래 → 기본 루브릭 자동 불러오기, 기준 편집) · 열기/닫기
+ *   - 학생: 열린 과제 목록 · 과제 상세(글감·조건·평가 기준 이름)
  * v0.1.0 — 1단계: 기반
  *   - 교사: 배포 URL 등록 → 연결 테스트 → 비밀번호 로그인 → 학급 개설 · 명단 · 링크/QR
  *   - 학생: 학급 링크(?s=배포ID&c=학급코드) 또는 코드 직접 입력 → 번호·이름으로 입장
@@ -12,7 +15,25 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '0.1.0';
+  var APP_VERSION = '0.2.0';
+
+  // 서버와 같은 목록 (ping/login 응답으로 덮어씀)
+  var GENRES = [
+    { key: 'explain', label: '설명하는 글' },
+    { key: 'argue',   label: '주장하는 글' },
+    { key: 'propose', label: '제안하는 글' },
+    { key: 'review',  label: '감상문' }
+  ];
+  var BANDS = [{ key: '3-4', label: '3~4학년' }, { key: '5-6', label: '5~6학년' }];
+  var GENRE_HINTS = {
+    explain: '예: 우리 학교의 자랑거리 한 가지를 골라, 처음 듣는 친구도 알 수 있게 설명해 보세요.',
+    argue:   '예: "쉬는 시간을 20분으로 늘려야 한다"에 찬성 또는 반대하는 글을 쓰세요. 까닭을 두 가지 이상 드세요.',
+    propose: '예: 우리 반에서 고치고 싶은 문제 하나를 골라, 누가 무엇을 어떻게 하면 좋을지 제안해 보세요.',
+    review:  '예: 최근에 읽은 책에서 가장 인상 깊은 장면을 고르고, 왜 그렇게 느꼈는지 쓰세요.'
+  };
+  function genreLabel(key) { for (var i = 0; i < GENRES.length; i++) if (GENRES[i].key === key) return GENRES[i].label; return key; }
+  function bandLabel(key) { for (var i = 0; i < BANDS.length; i++) if (BANDS[i].key === key) return BANDS[i].label; return key; }
+  function bandForGrade(grade) { return Number(grade) >= 5 ? '5-6' : '3-4'; }
 
   // ───────────────────────────────────────────
   // 저장 키
@@ -142,8 +163,15 @@
     if (path === '/teacher') return viewTeacher();
     if (path === '/teacher/classes') return viewClasses();
     if (path === '/teacher/new') return viewClassForm(null);
-    if (path.indexOf('/teacher/class/') === 0) return viewClassDetail(path.split('/')[3]);
+    if (path.indexOf('/teacher/class/') === 0) {
+      var seg = path.split('/'); // ['', 'teacher', 'class', classId, 'tasks'?, taskId|'new'?]
+      if (seg[4] === 'tasks' && seg[5] === 'new') return viewTaskForm(seg[3], null);
+      if (seg[4] === 'tasks' && seg[5]) return viewTaskForm(seg[3], seg[5]);
+      if (seg[4] === 'tasks') return viewTasks(seg[3]);
+      return viewClassDetail(seg[3]);
+    }
     if (path === '/class') return viewStudentHome();
+    if (path.indexOf('/class/task/') === 0) return viewStudentTask(path.split('/')[3]);
     return viewHome();
   }
 
@@ -155,7 +183,7 @@
       if (ssGet(KEYS.teacherPw)) {
         $topRight.appendChild(h('button', { class: 'small', text: '나가기', onclick: function () { ssDel(KEYS.teacherPw); go('/'); } }));
       }
-    } else if (student && path === '/class') {
+    } else if (student && path.indexOf('/class') === 0) {
       $topRight.appendChild(h('span', { class: 'chip', text: student.className + ' · ' + student.no + '번 ' + student.name }));
       $topRight.appendChild(h('button', { class: 'small', text: '나가기', onclick: function () { lsDel(KEYS.student); go('/'); } }));
     } else {
@@ -221,22 +249,100 @@
   }
 
   // ───────────────────────────────────────────
-  // 학생 홈 (1단계: 입장 확인 + 자리만 잡아 둠)
+  // 학생 홈 — 열린 과제 목록
   // ───────────────────────────────────────────
+  var studentTaskCache = {}; // taskId → task (상세 화면에서 재사용)
+
+  function fetchStudentTasks() {
+    var s = getStudent();
+    return api('task.listForStudent', { classId: s.classId, code: s.code }).then(function (d) {
+      studentTaskCache = {};
+      d.tasks.forEach(function (t) { studentTaskCache[t.taskId] = t; });
+      return d.tasks;
+    });
+  }
+
+  function taskConditionText(t) {
+    var parts = [];
+    if (t.minChars && t.maxChars) parts.push(t.minChars + '~' + t.maxChars + '자');
+    else if (t.minChars) parts.push(t.minChars + '자 이상');
+    else if (t.maxChars) parts.push(t.maxChars + '자 이하');
+    if (t.requiredWords && t.requiredWords.length) parts.push('꼭 쓸 낱말: ' + t.requiredWords.join(', '));
+    return parts.join(' · ');
+  }
+
   function viewStudentHome() {
     var s = getStudent();
     if (!s) { go('/'); return; }
+    var list = h('div', { class: 'task-list' }, [h('div', { class: 'loading', text: '과제를 불러오는 중…' })]);
     var card = h('div', { class: 'card student-home' }, [
       h('div', { class: 'muted', text: s.className }),
       h('div', { class: 'greet', text: s.name + ' 님, 어서 와요! 🌱' }),
-      h('div', { class: 'empty' }, [
-        h('span', { class: 'big-emoji', text: '✏️' }),
-        '아직 글쓰기 과제가 없어요.',
-        h('br'),
-        h('span', { class: 'muted', text: '선생님이 과제를 올리면 여기에 나타나요.' })
-      ])
+      list
     ]);
     render(card);
+
+    fetchStudentTasks()
+      .then(function (tasks) {
+        clear(list);
+        if (!tasks.length) {
+          list.appendChild(h('div', { class: 'empty' }, [
+            h('span', { class: 'big-emoji', text: '✏️' }),
+            '아직 글쓰기 과제가 없어요.',
+            h('br'),
+            h('span', { class: 'muted', text: '선생님이 과제를 올리면 여기에 나타나요.' })
+          ]));
+          return;
+        }
+        tasks.forEach(function (t) {
+          list.appendChild(h('a', { href: '#/class/task/' + t.taskId, class: 'task-item' }, [
+            h('div', {}, [
+              h('span', { class: 'badge genre', text: t.genreLabel }),
+              h('div', { class: 'task-title', text: t.title }),
+              h('div', { class: 'task-meta', text: taskConditionText(t) || '분량 자유' })
+            ]),
+            h('div', { class: 'task-go', text: '글 쓰러 가기 →' })
+          ]));
+        });
+      })
+      .catch(function (e) {
+        clear(list);
+        list.appendChild(h('p', { class: 'bad', text: e.message }));
+        if (/다시 들어와/.test(e.message)) { lsDel(KEYS.student); }
+      });
+  }
+
+  // 학생: 과제 상세 (2단계: 글감·조건·기준 보기 / 3단계에서 글쓰기 편집기 연결)
+  function viewStudentTask(taskId) {
+    var s = getStudent();
+    if (!s) { go('/'); return; }
+    var holder = h('div', { class: 'card' }, [h('div', { class: 'loading', text: '과제를 불러오는 중…' })]);
+    render(holder);
+
+    var ready = studentTaskCache[taskId] ? Promise.resolve(studentTaskCache[taskId])
+      : fetchStudentTasks().then(function () { return studentTaskCache[taskId]; });
+
+    ready.then(function (t) {
+      if (!t) throw new Error('이 과제는 지금 볼 수 없어요. 선생님께 여쭤보세요.');
+      var card = h('div', { class: 'card' }, [
+        h('span', { class: 'badge genre', text: t.genreLabel }),
+        h('h2', { text: t.title, style: 'margin-top:8px' }),
+        h('div', { class: 'prompt-box', text: t.prompt }),
+        taskConditionText(t) ? h('p', { class: 'hint', text: '✅ ' + taskConditionText(t) }) : null,
+        h('h3', { text: '선생님이 보는 기준' }),
+        h('div', { class: 'chips' }, t.criteriaNames.map(function (n) { return h('span', { class: 'badge', text: n }); })),
+        h('div', { class: 'empty', style: 'margin-top:18px' }, [
+          h('span', { class: 'big-emoji', text: '🚧' }),
+          '글쓰기 화면은 다음 단계에서 열려요.',
+          h('br'),
+          h('span', { class: 'muted', text: '(3단계: 글쓰기 편집기 · 제출)' })
+        ]),
+        h('div', { class: 'actions' }, [h('a', { href: '#/class', class: 'btn ghost small', text: '← 과제 목록' })])
+      ]);
+      render(card);
+    }).catch(function (e) {
+      render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/class', class: 'btn ghost small', text: '← 과제 목록' })]));
+    });
   }
 
   // ───────────────────────────────────────────
@@ -279,6 +385,7 @@
       ssSet(KEYS.teacherPw, inPw.value);
       teacherApi('teacher.login')
         .then(function (d) {
+          if (d.genres && d.genres.length) GENRES = d.genres;
           toast((d.teacher.name ? d.teacher.name + ' 선생님, ' : '') + '환영합니다!');
           go('/teacher/classes');
         })
@@ -355,10 +462,11 @@
           list.appendChild(h('div', { class: 'class-item' + (archived ? ' archived' : '') }, [
             h('div', {}, [
               h('div', { class: 'name' }, [c.name + ' ', h('span', { class: 'badge' + (archived ? ' off' : ''), text: archived ? '보관' : '활성' })]),
-              h('div', { class: 'meta', text: c.grade + '학년 · 학생 ' + c.studentCount + '명 · ' + String(c.createdAt).slice(0, 10) }),
+              h('div', { class: 'meta', text: c.grade + '학년 · 학생 ' + c.studentCount + '명 · 과제 ' + (c.taskCount || 0) + '개 · ' + String(c.createdAt).slice(0, 10) }),
               h('div', { class: 'code', text: c.code })
             ]),
             h('div', { class: 'btns' }, [
+              h('a', { href: '#/teacher/class/' + c.classId + '/tasks', class: 'btn small', text: '✏️ 과제' }),
               h('a', { href: '#/teacher/class/' + c.classId, class: 'btn small secondary', text: '링크·QR·명단' })
             ])
           ]));
@@ -372,6 +480,7 @@
         statusBox.appendChild(h('li', {}, [h('span', { class: d.checks.sheets ? 'ok' : 'bad', text: d.checks.sheets ? '✅' : '❌' }), ' 시트 초기화 ' + (d.checks.sheets ? '완료' : '필요 (메뉴 → 시트 초기화)')]));
         statusBox.appendChild(h('li', {}, [h('span', { class: d.checks.apiKey ? 'ok' : 'bad', text: d.checks.apiKey ? '✅' : '❌' }), ' Gemini API 키 ' + (d.checks.apiKey ? '등록됨 (' + d.teacher.model + ')' : '없음 — 설정 시트에 입력하세요')]));
         statusBox.appendChild(h('li', {}, [h('span', { class: 'ok', text: '✅' }), ' 교사 비밀번호 설정됨']));
+        statusBox.appendChild(h('li', {}, [h('span', { class: d.checks.rubrics ? 'ok' : 'bad', text: d.checks.rubrics ? '✅' : '❌' }), ' 기본 루브릭 ' + (d.checks.rubrics ? '준비됨 (루브릭 시트에서 문구 수정 가능)' : '없음 — 시트 메뉴 → 기본 루브릭 다시 넣기')]));
         if (d.teacher.name || d.teacher.school) {
           statusBox.appendChild(h('li', {}, [h('span', { class: 'muted', text: '👩‍🏫 ' + [d.teacher.school, d.teacher.name].filter(Boolean).join(' · ') })]));
         }
@@ -510,6 +619,7 @@
           rosterList,
           h('div', { class: 'actions' }, [
             h('a', { href: '#/teacher/classes', class: 'btn ghost small', text: '← 학급 목록' }),
+            h('a', { href: '#/teacher/class/' + cls.classId + '/tasks', class: 'btn small', text: '✏️ 과제 관리' }),
             h('button', { class: 'small secondary', text: '명단 수정', onclick: function () { viewClassForm({ classId: cls.classId, name: cls.name, grade: cls.grade, students: students }); } }),
             h('button', { class: 'small ' + (archived ? 'secondary' : 'danger'), text: archived ? '다시 열기' : '학급 보관(닫기)', onclick: function (ev) {
               var b = ev.currentTarget;
@@ -526,6 +636,255 @@
   }
 
   // ───────────────────────────────────────────
+  // 교사: 과제 목록
+  // ───────────────────────────────────────────
+  var classCache = {}; // classId → class (목록에서 채움)
+
+  function getClass(classId) {
+    if (classCache[classId]) return Promise.resolve(classCache[classId]);
+    return teacherApi('class.list').then(function (d) {
+      d.classes.forEach(function (c) { classCache[c.classId] = c; });
+      if (!classCache[classId]) throw new Error('학급을 찾을 수 없어요.');
+      return classCache[classId];
+    });
+  }
+
+  function viewTasks(classId) {
+    if (!ssGet(KEYS.teacherPw)) { go('/teacher'); return; }
+    var list = h('div', { class: 'task-list' }, [h('div', { class: 'loading', text: '과제를 불러오는 중…' })]);
+    var title = h('h2', { text: '과제' });
+    var desc = h('p', { class: 'desc', text: '' });
+    var card = h('div', { class: 'card' }, [
+      h('div', { class: 'row' }, [
+        h('div', {}, [title, desc]),
+        h('a', { href: '#/teacher/class/' + classId + '/tasks/new', class: 'btn fit', text: '+ 새 과제' })
+      ]),
+      list,
+      h('div', { class: 'actions' }, [h('a', { href: '#/teacher/classes', class: 'btn ghost small', text: '← 학급 목록' })])
+    ]);
+    render(card);
+
+    Promise.all([getClass(classId), teacherApi('task.list', { classId: classId })])
+      .then(function (res) {
+        var cls = res[0];
+        var tasks = res[1].tasks;
+        title.textContent = cls.name + ' · 과제';
+        desc.textContent = cls.grade + '학년 · 학생 ' + cls.studentCount + '명 · 열린 과제는 학생 화면에 바로 보여요.';
+        clear(list);
+        if (!tasks.length) {
+          list.appendChild(h('div', { class: 'empty' }, [h('span', { class: 'big-emoji', text: '✏️' }), '아직 과제가 없어요. 첫 과제를 만들어 보세요!']));
+          return;
+        }
+        tasks.forEach(function (t) {
+          var closed = t.status !== '열림';
+          var item = h('div', { class: 'task-item teacher' + (closed ? ' closed' : '') }, [
+            h('div', {}, [
+              h('span', { class: 'badge genre', text: t.genreLabel }),
+              h('span', { class: 'badge' + (closed ? ' off' : ''), text: closed ? '닫힘' : '열림', style: 'margin-left:6px' }),
+              h('div', { class: 'task-title', text: t.title }),
+              h('div', { class: 'task-meta', text: bandLabel(t.band) + ' 기준 ' + t.criteria.length + '개 · ' + (taskConditionText(t) || '분량 자유') + ' · ' + String(t.createdAt).slice(0, 10) })
+            ]),
+            h('div', { class: 'btns' }, [
+              h('a', { href: '#/teacher/class/' + classId + '/tasks/' + t.taskId, class: 'btn small secondary', text: '수정' }),
+              h('button', { class: 'small ' + (closed ? 'secondary' : 'ghost'), text: closed ? '다시 열기' : '닫기', onclick: function (ev) {
+                var b = ev.currentTarget; setBusy(b, true);
+                teacherApi('task.setStatus', { taskId: t.taskId, status: closed ? '열림' : '닫힘' })
+                  .then(function () { toast(closed ? '과제를 다시 열었어요.' : '과제를 닫았어요. 학생에게 보이지 않아요.'); viewTasks(classId); })
+                  .catch(function (e) { toast(e.message, true); setBusy(b, false); });
+              } })
+            ])
+          ]);
+          list.appendChild(item);
+        });
+      })
+      .catch(function (e) { clear(list); list.appendChild(h('p', { class: 'bad', text: e.message })); });
+  }
+
+  // ───────────────────────────────────────────
+  // 교사: 과제 만들기 / 수정
+  // ───────────────────────────────────────────
+  function viewTaskForm(classId, taskId) {
+    if (!ssGet(KEYS.teacherPw)) { go('/teacher'); return; }
+    render(h('div', { class: 'card' }, [h('div', { class: 'loading', text: '불러오는 중…' })]));
+
+    var loads = [getClass(classId)];
+    if (taskId) loads.push(teacherApi('task.get', { taskId: taskId }));
+    Promise.all(loads).then(function (res) {
+      buildTaskForm(res[0], res[1] ? res[1].task : null);
+    }).catch(function (e) {
+      render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/teacher/class/' + classId + '/tasks', class: 'btn ghost small', text: '← 과제 목록' })]));
+    });
+  }
+
+  function buildTaskForm(cls, existing) {
+    var classId = cls.classId;
+    var state = {
+      criteria: existing ? existing.criteria.map(cloneCriterion) : [],
+      loadedKey: existing ? existing.genre + '|' + existing.band : ''
+    };
+
+    // ── 기본 정보 ──
+    var inTitle = h('input', { type: 'text', placeholder: '예: 우리 학교 자랑거리 설명하기', value: existing ? existing.title : '' });
+    var selGenre = h('select', {}, [h('option', { value: '', text: '갈래를 고르세요' })].concat(GENRES.map(function (g) {
+      return h('option', { value: g.key, text: g.label });
+    })));
+    if (existing) selGenre.value = existing.genre;
+    var selBand = h('select', {}, BANDS.map(function (b) { return h('option', { value: b.key, text: b.label + ' 기준' }); }));
+    selBand.value = existing ? existing.band : bandForGrade(cls.grade);
+    var inPrompt = h('textarea', { placeholder: GENRE_HINTS[selGenre.value] || '학생에게 보여 줄 글감·안내를 적어 주세요.' });
+    if (existing) inPrompt.value = existing.prompt;
+    var inMin = h('input', { type: 'text', inputmode: 'numeric', placeholder: '예: 300', value: existing && existing.minChars ? String(existing.minChars) : '' });
+    var inMax = h('input', { type: 'text', inputmode: 'numeric', placeholder: '예: 800', value: existing && existing.maxChars ? String(existing.maxChars) : '' });
+    var inWords = h('input', { type: 'text', placeholder: '예: 까닭, 예를 들어 (쉼표로 구분)', value: existing ? existing.requiredWords.join(', ') : '' });
+
+    // ── 기준 편집기 ──
+    var critBox = h('div', { class: 'crit-list' });
+    var critStatus = h('p', { class: 'hint', text: '' });
+
+    function cloneCriterion(c) { return { id: c.id, name: c.name, group: c.group || '추가', levels: (c.levels || []).slice(0, 4).concat(['', '', '', '']).slice(0, 4) }; }
+
+    function renderCriteria() {
+      clear(critBox);
+      if (!state.criteria.length) {
+        critBox.appendChild(h('div', { class: 'empty', style: 'padding:22px' }, ['갈래를 고르면 기본 기준이 들어와요.']));
+        critStatus.textContent = '';
+        return;
+      }
+      state.criteria.forEach(function (c, idx) {
+        var open = false;
+        var body = h('div', { class: 'crit-body', style: 'display:none' });
+        var nameIn = h('input', { type: 'text', value: c.name, placeholder: '기준 이름' });
+        nameIn.addEventListener('input', function () { c.name = nameIn.value; head.textContent = (c.name || '(이름 없음)'); });
+        var levelInputs = c.levels.map(function (l, li) {
+          var ta = h('textarea', { rows: '2', placeholder: (li + 1) + '단계일 때의 글 모습', style: 'min-height:56px' });
+          ta.value = l;
+          ta.addEventListener('input', function () { c.levels[li] = ta.value; });
+          return h('div', { class: 'level-row' }, [h('span', { class: 'level-no', text: (li + 1) + '단계' }), ta]);
+        });
+        body.appendChild(h('label', { text: '기준 이름' }));
+        body.appendChild(nameIn);
+        body.appendChild(h('label', { text: '단계별 서술 (AI는 이 문장을 기준으로 단계를 판단해요)' }));
+        levelInputs.forEach(function (r) { body.appendChild(r); });
+        body.appendChild(h('div', { class: 'actions', style: 'margin-top:8px' }, [
+          h('button', { class: 'small danger', text: '이 기준 빼기', onclick: function () { state.criteria.splice(idx, 1); renderCriteria(); } })
+        ]));
+
+        var head = h('span', { class: 'crit-name', text: c.name || '(이름 없음)' });
+        var toggle = h('button', { class: 'small ghost', text: '펼치기' });
+        var row = h('div', { class: 'crit-item' }, [
+          h('div', { class: 'crit-head' }, [
+            h('span', { class: 'badge ' + (c.group === '공통' ? '' : c.group === '갈래' ? 'genre' : 'extra'), text: c.group }),
+            head,
+            h('span', { class: 'crit-preview', text: (c.levels[3] || '').slice(0, 40) + ((c.levels[3] || '').length > 40 ? '…' : '') }),
+            toggle
+          ]),
+          body
+        ]);
+        toggle.addEventListener('click', function () { open = !open; body.style.display = open ? 'block' : 'none'; toggle.textContent = open ? '접기' : '펼치기'; });
+        critBox.appendChild(row);
+      });
+      critStatus.textContent = '기준 ' + state.criteria.length + '개 · 공통 ' + state.criteria.filter(function (c) { return c.group === '공통'; }).length + ' · 갈래 ' + state.criteria.filter(function (c) { return c.group === '갈래'; }).length + ' · 추가 ' + state.criteria.filter(function (c) { return c.group !== '공통' && c.group !== '갈래'; }).length;
+    }
+
+    function loadDefaults(force) {
+      var genre = selGenre.value, band = selBand.value;
+      if (!genre) return;
+      var key = genre + '|' + band;
+      if (!force && key === state.loadedKey && state.criteria.length) return;
+      if (!force && state.criteria.length && !confirm('갈래/학년군을 바꾸면 기준이 기본값으로 다시 채워져요. 지금 고친 내용은 사라집니다. 계속할까요?')) {
+        return;
+      }
+      critStatus.textContent = '기본 기준을 불러오는 중…';
+      teacherApi('rubric.defaults', { genre: genre, band: band })
+        .then(function (d) {
+          state.criteria = d.criteria.map(cloneCriterion);
+          state.loadedKey = key;
+          renderCriteria();
+          toast(genreLabel(genre) + ' · ' + bandLabel(band) + ' 기본 기준을 불러왔어요.');
+        })
+        .catch(function (e) { toast(e.message, true); critStatus.textContent = ''; });
+    }
+
+    selGenre.addEventListener('change', function () {
+      if (!inPrompt.value.trim() || Object.keys(GENRE_HINTS).some(function (k) { return GENRE_HINTS[k] === inPrompt.placeholder; })) inPrompt.placeholder = GENRE_HINTS[selGenre.value] || '';
+      loadDefaults(false);
+    });
+    selBand.addEventListener('change', function () { loadDefaults(false); });
+
+    var btnAddCrit = h('button', { class: 'small secondary', text: '+ 기준 직접 추가', onclick: function () {
+      state.criteria.push({ id: 'X' + Date.now().toString(36), name: '', group: '추가', levels: ['', '', '', ''] });
+      renderCriteria();
+      var items = critBox.querySelectorAll('.crit-item');
+      var last = items[items.length - 1];
+      if (last) { last.querySelector('.crit-head button').click(); last.querySelector('input').focus(); }
+    } });
+    var btnReload = h('button', { class: 'small ghost', text: '기본값으로 되돌리기', onclick: function () { if (!selGenre.value) return toast('먼저 갈래를 고르세요.', true); if (confirm('지금 기준을 모두 버리고 기본 기준으로 되돌릴까요?')) loadDefaults(true); } });
+
+    // ── 저장 ──
+    var btnSave = h('button', { class: 'big', text: existing ? '과제 저장하기' : '과제 만들기 ✏️' });
+    btnSave.addEventListener('click', function () {
+      var payload = {
+        classId: classId,
+        title: inTitle.value.trim(),
+        genre: selGenre.value,
+        band: selBand.value,
+        prompt: inPrompt.value.trim(),
+        minChars: parseInt(inMin.value, 10) || 0,
+        maxChars: parseInt(inMax.value, 10) || 0,
+        requiredWords: inWords.value.split(',').map(function (w) { return w.trim(); }).filter(Boolean),
+        criteria: state.criteria.map(function (c) { return { id: c.id, name: c.name.trim(), group: c.group, levels: c.levels.map(function (l) { return l.trim(); }) }; })
+      };
+      if (!payload.title) return toast('과제 제목을 입력해 주세요.', true);
+      if (!payload.genre) return toast('갈래를 고르세요.', true);
+      if (!payload.prompt) return toast('글감을 입력해 주세요.', true);
+      if (payload.maxChars && payload.minChars && payload.maxChars < payload.minChars) return toast('최대 글자 수가 최소보다 작아요.', true);
+      if (!payload.criteria.length) return toast('평가 기준이 한 개 이상 필요해요.', true);
+      for (var i = 0; i < payload.criteria.length; i++) {
+        var c = payload.criteria[i];
+        if (!c.name) return toast((i + 1) + '번째 기준의 이름이 비어 있어요.', true);
+        if (c.levels.some(function (l) { return !l; })) return toast('"' + c.name + '" 기준의 단계 서술을 4개 모두 적어 주세요.', true);
+      }
+      setBusy(btnSave, true, '저장 중…');
+      var p = existing ? teacherApi('task.update', Object.assign({ taskId: existing.taskId }, payload)) : teacherApi('task.create', payload);
+      p.then(function () {
+        toast(existing ? '과제를 저장했어요.' : '과제를 만들었어요! 학생 화면에 바로 보여요.');
+        classCache = {};
+        go('/teacher/class/' + classId + '/tasks');
+      }).catch(function (e) { toast(e.message, true); setBusy(btnSave, false); });
+    });
+
+    var card = h('div', { class: 'card' }, [
+      h('h2', { text: existing ? '과제 수정' : '새 과제 만들기' }),
+      h('p', { class: 'desc', text: cls.name + ' · ' + cls.grade + '학년' }),
+      h('label', { text: '과제 제목' }), inTitle,
+      h('div', { class: 'row' }, [
+        h('div', {}, [h('label', { text: '갈래' }), selGenre]),
+        h('div', { class: 'fit', style: 'min-width:150px' }, [h('label', { text: '기준 학년군' }), selBand])
+      ]),
+      h('label', { text: '글감 · 안내 (학생에게 그대로 보여요)' }), inPrompt,
+      h('div', { class: 'row' }, [
+        h('div', {}, [h('label', { text: '최소 글자 수' }), inMin]),
+        h('div', {}, [h('label', { text: '최대 글자 수' }), inMax])
+      ]),
+      h('label', { text: '꼭 써야 할 낱말 (선택)' }), inWords,
+      h('p', { class: 'hint', text: '글자 수는 공백 포함. 비워 두면 제한 없음.' })
+    ]);
+
+    var critCard = h('div', { class: 'card' }, [
+      h('h2', { text: '평가 기준' }),
+      h('p', { class: 'desc', text: '공통 기준 + 갈래 기준이 학년군에 맞춰 들어와요. 문구를 고치거나 기준을 빼고 더할 수 있어요. 단계 서술이 곧 AI 채점 기준이 됩니다.' }),
+      critBox, critStatus,
+      h('div', { class: 'actions' }, [btnAddCrit, btnReload]),
+      btnSave,
+      h('div', { class: 'actions' }, [h('a', { href: '#/teacher/class/' + classId + '/tasks', class: 'btn ghost small', text: '← 과제 목록' })])
+    ]);
+
+    render(card, critCard);
+    renderCriteria();
+    if (!existing) inTitle.focus();
+  }
+
+  // ───────────────────────────────────────────
   // 시작
   // ───────────────────────────────────────────
   readLinkParams();
@@ -533,5 +892,5 @@
   route();
 
   // 테스트용 노출 (브라우저 콘솔)
-  window.__geulsup = { version: APP_VERSION, parseRoster: parseRoster, extractDeployId: extractDeployId };
+  window.__geulsup = { version: APP_VERSION, parseRoster: parseRoster, extractDeployId: extractDeployId, taskConditionText: taskConditionText, bandForGrade: bandForGrade };
 })();
