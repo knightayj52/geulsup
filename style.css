@@ -1,0 +1,148 @@
+/*
+  글숲 (geulsup) — 화면 스타일
+  © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
+*/
+
+:root {
+  --forest-900: #1f4733;
+  --forest-700: #2f6b4f;
+  --forest-500: #4d9a73;
+  --forest-100: #e3f2ea;
+  --leaf: #a7d7b8;
+  --sun: #ffd27a;
+  --bark: #6b4f3a;
+  --paper: #fbfaf6;
+  --ink: #26302b;
+  --ink-soft: #5f6b65;
+  --line: #dfe6e1;
+  --danger: #c0443f;
+  --radius: 16px;
+  --shadow: 0 6px 24px rgba(31, 71, 51, 0.08);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  line-height: 1.6;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ───── 상단바 ───── */
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px;
+  background: var(--forest-700); color: #fff;
+}
+.brand { display: flex; align-items: center; gap: 8px; color: #fff; text-decoration: none; font-weight: 700; font-size: 20px; }
+.brand-mark { font-size: 22px; }
+.topbar-right { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.topbar-right .chip { background: rgba(255,255,255,0.18); padding: 4px 12px; border-radius: 999px; }
+.topbar-right button { background: transparent; border: 1px solid rgba(255,255,255,0.6); color: #fff; }
+
+/* ───── 레이아웃 ───── */
+.app { flex: 1; width: 100%; max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+.footer { text-align: center; font-size: 12px; color: var(--ink-soft); padding: 18px 16px; border-top: 1px solid var(--line); }
+.loading { text-align: center; color: var(--ink-soft); padding: 60px 0; }
+
+.card {
+  background: #fff; border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 24px; margin-bottom: 18px; border: 1px solid var(--line);
+}
+.card h2 { margin: 0 0 6px; font-size: 20px; color: var(--forest-900); }
+.card h3 { margin: 18px 0 8px; font-size: 16px; color: var(--forest-900); }
+.card p.desc { margin: 0 0 16px; color: var(--ink-soft); font-size: 14px; }
+
+.hero { text-align: center; padding: 32px 16px 12px; }
+.hero h1 { font-size: 34px; margin: 0 0 6px; color: var(--forest-900); }
+.hero p { margin: 0; color: var(--ink-soft); }
+
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 640px) { .grid-2 { grid-template-columns: 1fr; } }
+
+/* ───── 폼 ───── */
+label { display: block; font-size: 14px; font-weight: 500; margin: 12px 0 6px; color: var(--ink); }
+input[type="text"], input[type="password"], input[type="url"], select, textarea {
+  width: 100%; padding: 12px 14px; font-size: 16px; font-family: inherit;
+  border: 1.5px solid var(--line); border-radius: 12px; background: #fff; color: var(--ink);
+  transition: border-color .15s;
+}
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--forest-500); }
+textarea { min-height: 140px; resize: vertical; line-height: 1.7; }
+.hint { font-size: 12px; color: var(--ink-soft); margin: 6px 0 0; }
+.row { display: flex; gap: 10px; align-items: flex-end; }
+.row > * { flex: 1; }
+.row > .fit { flex: 0 0 auto; }
+
+button, .btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 12px 18px; font-size: 15px; font-weight: 500; font-family: inherit;
+  border: none; border-radius: 12px; cursor: pointer; text-decoration: none;
+  background: var(--forest-700); color: #fff; transition: transform .05s, opacity .15s;
+}
+button:hover { opacity: .92; }
+button:active { transform: translateY(1px); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button.secondary { background: var(--forest-100); color: var(--forest-900); }
+button.ghost { background: transparent; color: var(--forest-900); border: 1.5px solid var(--line); }
+button.danger { background: #fdecec; color: var(--danger); }
+button.small { padding: 8px 12px; font-size: 13px; border-radius: 10px; }
+button.big { width: 100%; padding: 16px; font-size: 18px; font-weight: 700; margin-top: 16px; }
+
+.actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+
+/* ───── 상태 표시 ───── */
+.status-list { list-style: none; padding: 0; margin: 10px 0 0; }
+.status-list li { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px dashed var(--line); font-size: 14px; }
+.status-list li:last-child { border-bottom: none; }
+.ok { color: var(--forest-500); font-weight: 700; }
+.bad { color: var(--danger); font-weight: 700; }
+.badge { display: inline-block; font-size: 12px; padding: 2px 10px; border-radius: 999px; background: var(--forest-100); color: var(--forest-900); }
+.badge.off { background: #eee; color: #777; }
+
+/* ───── 단계 안내 ───── */
+.steps { counter-reset: s; list-style: none; padding: 0; margin: 0; }
+.steps li { counter-increment: s; position: relative; padding-left: 36px; margin-bottom: 10px; font-size: 14px; }
+.steps li::before {
+  content: counter(s); position: absolute; left: 0; top: 2px;
+  width: 24px; height: 24px; border-radius: 50%; background: var(--forest-700); color: #fff;
+  font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+}
+
+/* ───── 학급 목록 ───── */
+.class-list { display: grid; gap: 12px; }
+.class-item {
+  border: 1.5px solid var(--line); border-radius: 14px; padding: 16px;
+  display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center;
+}
+.class-item.archived { opacity: .6; }
+.class-item .name { font-size: 17px; font-weight: 700; color: var(--forest-900); }
+.class-item .meta { font-size: 13px; color: var(--ink-soft); margin-top: 2px; }
+.class-item .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 22px; letter-spacing: 3px; color: var(--forest-700); font-weight: 700; }
+.class-item .btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+
+.share-box { background: var(--forest-100); border-radius: 14px; padding: 16px; margin-top: 14px; }
+.share-box .link { font-size: 13px; word-break: break-all; background: #fff; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); }
+.qr-wrap { display: flex; justify-content: center; padding: 14px; background: #fff; border-radius: 12px; margin-top: 10px; }
+
+/* ───── 학생 화면 ───── */
+.student-home { text-align: center; padding: 20px 0; }
+.student-home .greet { font-size: 24px; font-weight: 700; color: var(--forest-900); margin: 8px 0; }
+.empty { background: var(--forest-100); border-radius: 14px; padding: 36px 20px; color: var(--forest-900); font-size: 16px; margin-top: 20px; }
+.empty .big-emoji { font-size: 44px; display: block; margin-bottom: 8px; }
+
+/* ───── 토스트 ───── */
+.toast {
+  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px);
+  background: var(--ink); color: #fff; padding: 12px 18px; border-radius: 12px; font-size: 14px;
+  opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; max-width: 90vw; text-align: center; z-index: 50;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.error { background: var(--danger); }
+
+.muted { color: var(--ink-soft); font-size: 13px; }
+.center { text-align: center; }

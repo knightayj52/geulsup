@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<!--
+  글숲 (geulsup) — 학생 글쓰기 AI 피드백 앱 · 화면 (GitHub Pages)
+  © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
+  v0.1.0 — 1단계: 기반 (교사 설정 · 학급 개설 · 링크/QR · 학생 입장)
+-->
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="author" content="영쌤클래스">
+  <meta name="copyright" content="© 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지">
+  <meta name="description" content="글숲 — 학생이 쓴 글에 기준별 피드백을 주는 글쓰기 교실">
+  <title>글숲 · 글쓰기 교실</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <a href="#/" class="brand" id="brandLink">
+    <span class="brand-mark">🌳</span>
+    <span class="brand-name">글숲</span>
+  </a>
+  <div class="topbar-right" id="topbarRight"></div>
+</header>
+
+<main id="app" class="app">
+  <div class="loading">불러오는 중…</div>
+</main>
+
+<footer class="footer">
+  © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
+</footer>
+
+<div id="toast" class="toast" aria-live="polite"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
