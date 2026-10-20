@@ -474,9 +474,26 @@
       })
       .catch(function (e) { clear(list); list.appendChild(h('p', { class: 'bad', text: e.message })); });
 
+    var versionLine = h('li', { style: 'display:none' });
+    statusBox.appendChild(versionLine);
+    api('ping').then(function (d) {
+      var sv = String(d.version || '?');
+      if (sv !== APP_VERSION) {
+        versionLine.style.display = '';
+        versionLine.appendChild(h('span', { class: 'bad', text: '⚠️' }));
+        versionLine.appendChild(h('span', {}, [
+          ' 서버 v' + sv + ' / 화면 v' + APP_VERSION + ' — 버전이 달라요. Apps Script에서 Code.gs를 교체한 뒤 ',
+          h('b', { text: '배포 관리 → 편집 → 새 버전 → 배포' }),
+          '를 해 주세요.'
+        ]));
+      }
+    }).catch(function () { /* 상태 카드에서 따로 표시됨 */ });
+
     teacherApi('teacher.status')
       .then(function (d) {
+        var keepVersion = versionLine;
         clear(statusBox);
+        statusBox.appendChild(keepVersion);
         statusBox.appendChild(h('li', {}, [h('span', { class: d.checks.sheets ? 'ok' : 'bad', text: d.checks.sheets ? '✅' : '❌' }), ' 시트 초기화 ' + (d.checks.sheets ? '완료' : '필요 (메뉴 → 시트 초기화)')]));
         statusBox.appendChild(h('li', {}, [h('span', { class: d.checks.apiKey ? 'ok' : 'bad', text: d.checks.apiKey ? '✅' : '❌' }), ' Gemini API 키 ' + (d.checks.apiKey ? '등록됨 (' + d.teacher.model + ')' : '없음 — 설정 시트에 입력하세요')]));
         statusBox.appendChild(h('li', {}, [h('span', { class: 'ok', text: '✅' }), ' 교사 비밀번호 설정됨']));
@@ -795,6 +812,8 @@
         return;
       }
       critStatus.textContent = '기본 기준을 불러오는 중…';
+      clear(critBox);
+      critBox.appendChild(h('div', { class: 'loading', text: '기본 기준을 불러오는 중…' }));
       teacherApi('rubric.defaults', { genre: genre, band: band })
         .then(function (d) {
           state.criteria = d.criteria.map(cloneCriterion);
@@ -802,7 +821,18 @@
           renderCriteria();
           toast(genreLabel(genre) + ' · ' + bandLabel(band) + ' 기본 기준을 불러왔어요.');
         })
-        .catch(function (e) { toast(e.message, true); critStatus.textContent = ''; });
+        .catch(function (e) {
+          // 토스트는 금방 사라지므로, 그 자리에 오류를 남기고 다시 시도할 수 있게 합니다
+          var msg = e.message;
+          if (/알 수 없는 요청/.test(msg)) msg = '서버가 아직 예전 버전이에요. Apps Script에서 Code.gs를 교체한 뒤 "배포 관리 → 편집 → 새 버전 → 배포"를 해 주세요. (' + msg + ')';
+          clear(critBox);
+          critBox.appendChild(h('div', { class: 'empty', style: 'padding:22px' }, [
+            h('p', { class: 'bad', text: '기본 기준을 불러오지 못했어요.', style: 'margin:0 0 6px' }),
+            h('p', { class: 'muted', text: msg, style: 'margin:0 0 12px' }),
+            h('button', { class: 'small secondary', text: '다시 불러오기', onclick: function () { loadDefaults(true); } })
+          ]));
+          critStatus.textContent = '';
+        });
     }
 
     selGenre.addEventListener('change', function () {
