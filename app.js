@@ -2,6 +2,9 @@
  * 글숲 (geulsup) — 학생 글쓰기 AI 피드백 앱 · 화면 로직
  * © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
  *
+ * v0.3.0 — 3단계: 글쓰기·제출
+ *   - 학생: 글쓰기 편집기(글자 수·조건 체크·자동 임시 저장·제출), 제출한 글 보기
+ *   - 교사: 과제별 제출 현황 · 글 열람 · 제출 되돌리기
  * v0.2.1 — 학년군 날짜 변환 버그 수정 (루브릭·과제 시트)
  * v0.2.0 — 2단계: 과제 만들기
  *   - 교사: 학급별 과제 목록 · 과제 만들기/수정(갈래 → 기본 루브릭 자동 불러오기, 기준 편집) · 열기/닫기
@@ -16,7 +19,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '0.2.1';
+  var APP_VERSION = '0.3.0';
 
   // 서버와 같은 목록 (ping/login 응답으로 덮어씀)
   var GENRES = [
@@ -167,10 +170,12 @@
     if (path.indexOf('/teacher/class/') === 0) {
       var seg = path.split('/'); // ['', 'teacher', 'class', classId, 'tasks'?, taskId|'new'?]
       if (seg[4] === 'tasks' && seg[5] === 'new') return viewTaskForm(seg[3], null);
+      if (seg[4] === 'tasks' && seg[5] && seg[6] === 'submissions') return viewSubmissions(seg[3], seg[5]);
       if (seg[4] === 'tasks' && seg[5]) return viewTaskForm(seg[3], seg[5]);
       if (seg[4] === 'tasks') return viewTasks(seg[3]);
       return viewClassDetail(seg[3]);
     }
+    if (path.indexOf('/teacher/submission/') === 0) return viewSubmissionDetail(path.split('/')[3]);
     if (path === '/class') return viewStudentHome();
     if (path.indexOf('/class/task/') === 0) return viewStudentTask(path.split('/')[3]);
     return viewHome();
@@ -313,37 +318,197 @@
       });
   }
 
-  // 학생: 과제 상세 (2단계: 글감·조건·기준 보기 / 3단계에서 글쓰기 편집기 연결)
+  // ───────────────────────────────────────────
+  // 학생: 과제 상세 + 글쓰기 편집기
+  // ───────────────────────────────────────────
+  function countChars(text) { return String(text || '').replace(/\r\n/g, '\n').trim().length; }
+
+  function studentPayload(extra) {
+    var s = getStudent();
+    return Object.assign({ classId: s.classId, code: s.code, no: s.no, name: s.name }, extra || {});
+  }
+
+  function draftKey(taskId) { var s = getStudent(); return 'geulsup_draft_' + s.classId + '_' + s.no + '_' + taskId; }
+
+  function conditionChecks(t, text) {
+    var n = countChars(text);
+    var items = [];
+    if (t.minChars) items.push({ ok: n >= t.minChars, text: t.minChars + '자 이상' });
+    if (t.maxChars) items.push({ ok: n <= t.maxChars, text: t.maxChars + '자 이하' });
+    (t.requiredWords || []).forEach(function (w) { items.push({ ok: text.indexOf(w) >= 0, text: '"' + w + '" 쓰기' }); });
+    return items;
+  }
+
+  function fmtTime(str) {
+    // '2026-10-21 09:41:03' → '10/21 09:41'
+    var m = String(str || '').match(/^\d{4}-(\d{2})-(\d{2}) (\d{2}):(\d{2})/);
+    return m ? (Number(m[1]) + '/' + Number(m[2]) + ' ' + m[3] + ':' + m[4]) : String(str || '');
+  }
+
   function viewStudentTask(taskId) {
     var s = getStudent();
     if (!s) { go('/'); return; }
-    var holder = h('div', { class: 'card' }, [h('div', { class: 'loading', text: '과제를 불러오는 중…' })]);
-    render(holder);
+    render(h('div', { class: 'card' }, [h('div', { class: 'loading', text: '과제를 불러오는 중…' })]));
 
     var ready = studentTaskCache[taskId] ? Promise.resolve(studentTaskCache[taskId])
       : fetchStudentTasks().then(function () { return studentTaskCache[taskId]; });
 
     ready.then(function (t) {
       if (!t) throw new Error('이 과제는 지금 볼 수 없어요. 선생님께 여쭤보세요.');
-      var card = h('div', { class: 'card' }, [
-        h('span', { class: 'badge genre', text: t.genreLabel }),
-        h('h2', { text: t.title, style: 'margin-top:8px' }),
-        h('div', { class: 'prompt-box', text: t.prompt }),
-        taskConditionText(t) ? h('p', { class: 'hint', text: '✅ ' + taskConditionText(t) }) : null,
-        h('h3', { text: '선생님이 보는 기준' }),
-        h('div', { class: 'chips' }, t.criteriaNames.map(function (n) { return h('span', { class: 'badge', text: n }); })),
-        h('div', { class: 'empty', style: 'margin-top:18px' }, [
-          h('span', { class: 'big-emoji', text: '🚧' }),
-          '글쓰기 화면은 다음 단계에서 열려요.',
-          h('br'),
-          h('span', { class: 'muted', text: '(3단계: 글쓰기 편집기 · 제출)' })
-        ]),
-        h('div', { class: 'actions' }, [h('a', { href: '#/class', class: 'btn ghost small', text: '← 과제 목록' })])
-      ]);
-      render(card);
+      return api('submission.mine', studentPayload({ taskId: taskId })).then(function (mine) { buildStudentTask(t, mine); });
     }).catch(function (e) {
+      if (/다시 들어와/.test(e.message)) lsDel(KEYS.student);
       render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/class', class: 'btn ghost small', text: '← 과제 목록' })]));
     });
+  }
+
+  function buildStudentTask(t, mine) {
+    var taskId = t.taskId;
+    var header = h('div', { class: 'card' }, [
+      h('span', { class: 'badge genre', text: t.genreLabel }),
+      h('h2', { text: t.title, style: 'margin-top:8px' }),
+      h('div', { class: 'prompt-box', text: t.prompt }),
+      h('div', { class: 'chips', style: 'margin-top:6px' }, [h('span', { class: 'muted', text: '선생님이 보는 기준: ' })].concat(t.criteriaNames.map(function (n) { return h('span', { class: 'badge', text: n }); })))
+    ]);
+
+    // ── 제출된 글 (잠김 상태) ──
+    if (mine.locked) {
+      var last = mine.submitted[mine.submitted.length - 1];
+      var done = h('div', { class: 'card' }, [
+        h('div', { class: 'submitted-banner' }, [
+          h('span', { class: 'big-emoji', text: '🌿' }),
+          h('div', {}, [
+            h('div', { style: 'font-weight:700;font-size:17px', text: last.round + '차 글을 제출했어요!' }),
+            h('div', { class: 'muted', text: fmtTime(last.submittedAt) + ' · ' + last.charCount + '자 · 선생님과 AI의 피드백을 기다리는 중이에요.' })
+          ])
+        ]),
+        last.title ? h('h3', { text: last.title }) : null,
+        h('div', { class: 'essay-view', text: last.text }),
+        h('div', { class: 'actions' }, [h('a', { href: '#/class', class: 'btn ghost small', text: '← 과제 목록' })])
+      ]);
+      render(header, done);
+      return;
+    }
+
+    // ── 편집기 ──
+    var local = null;
+    try { local = JSON.parse(lsGet(draftKey(taskId), 'null')); } catch (e) { local = null; }
+    var draft = mine.draft || { title: '', text: '', savedAt: '' };
+    // 서버 저장본보다 이 기기의 임시본이 더 최근이면 그걸 씁니다 (전송 실패 대비)
+    if (local && local.at && (!draft.savedAt || local.at > draft.savedAt) && (local.text !== draft.text || local.title !== draft.title)) {
+      draft = { title: local.title || '', text: local.text || '', savedAt: draft.savedAt };
+    }
+
+    var inTitle = h('input', { type: 'text', placeholder: '제목 (안 써도 돼요)', value: draft.title, maxlength: '100', class: 'essay-title' });
+    var ta = h('textarea', { class: 'essay-editor', placeholder: '여기에 글을 써요. 쓰는 동안 자동으로 저장돼요.', spellcheck: 'false' });
+    ta.value = draft.text;
+    var counter = h('span', { class: 'char-count', text: '0자' });
+    var saveState = h('span', { class: 'save-state', text: draft.savedAt ? '저장됨 ' + fmtTime(draft.savedAt) : '' });
+    var condBox = h('div', { class: 'cond-list' });
+    var btnSave = h('button', { class: 'small secondary', text: '지금 저장' });
+    var btnSubmit = h('button', { class: 'big', text: '제출하기 🌳' });
+
+    var dirty = false, saving = false, timer = null, lastSent = { title: draft.title, text: draft.text };
+
+    function refresh() {
+      var text = ta.value;
+      var n = countChars(text);
+      counter.textContent = n + '자' + (t.minChars || t.maxChars ? ' / ' + (t.minChars && t.maxChars ? t.minChars + '~' + t.maxChars : t.minChars ? t.minChars + '자 이상' : t.maxChars + '자 이하') : '');
+      clear(condBox);
+      var checks = conditionChecks(t, text);
+      checks.forEach(function (c) { condBox.appendChild(h('span', { class: 'cond ' + (c.ok ? 'ok' : ''), text: (c.ok ? '✅ ' : '⬜ ') + c.text })); });
+      var allOk = checks.every(function (c) { return c.ok; }) && n > 0;
+      btnSubmit.disabled = !allOk;
+      btnSubmit.title = allOk ? '' : '조건을 모두 채우면 제출할 수 있어요';
+    }
+
+    function localSave() {
+      lsSet(draftKey(taskId), JSON.stringify({ title: inTitle.value, text: ta.value, at: nowIso() }));
+    }
+    function nowIso() {
+      var d = new Date(); function p(x) { return (x < 10 ? '0' : '') + x; }
+      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+    }
+
+    function serverSave(manual) {
+      if (saving) { dirty = true; return Promise.resolve(); }
+      var payload = { title: inTitle.value.trim(), text: ta.value };
+      if (!manual && payload.title === lastSent.title && payload.text === lastSent.text) return Promise.resolve();
+      saving = true; dirty = false;
+      saveState.textContent = '저장 중…';
+      return api('submission.saveDraft', studentPayload({ taskId: taskId, title: payload.title, text: payload.text }))
+        .then(function (d) {
+          lastSent = payload;
+          saveState.textContent = '저장됨 ' + fmtTime(d.savedAt);
+          saveState.className = 'save-state';
+          if (manual) toast('저장했어요.');
+        })
+        .catch(function (e) {
+          saveState.textContent = '저장 실패 — 이 기기에는 남아 있어요';
+          saveState.className = 'save-state bad';
+          if (manual) toast(e.message, true);
+          if (/이미 제출/.test(e.message)) { lsDel(draftKey(taskId)); viewStudentTask(taskId); }
+        })
+        .then(function () { saving = false; if (dirty) { dirty = false; scheduleSave(); } });
+    }
+    function scheduleSave() { clearTimeout(timer); timer = setTimeout(function () { serverSave(false); }, 2500); }
+    function onInput() { refresh(); localSave(); scheduleSave(); }
+    ta.addEventListener('input', onInput);
+    inTitle.addEventListener('input', onInput);
+    btnSave.addEventListener('click', function () { clearTimeout(timer); serverSave(true); });
+
+    btnSubmit.addEventListener('click', function () {
+      var text = ta.value;
+      var n = countChars(text);
+      if (!n) return toast('글을 써 주세요.', true);
+      var bad = conditionChecks(t, text).filter(function (c) { return !c.ok; });
+      if (bad.length) return toast('아직 채우지 못한 조건이 있어요: ' + bad.map(function (c) { return c.text; }).join(', '), true);
+      if (!confirm('제출하면 피드백을 받을 때까지 고칠 수 없어요.\n' + n + '자 · 제출할까요?')) return;
+      clearTimeout(timer);
+      setBusy(btnSubmit, true, '제출하는 중…');
+      api('submission.submit', studentPayload({ taskId: taskId, title: inTitle.value.trim(), text: text }))
+        .then(function () {
+          lsDel(draftKey(taskId));
+          toast('제출했어요! 🌳');
+          viewStudentTask(taskId);
+        })
+        .catch(function (e) { toast(e.message, true); setBusy(btnSubmit, false); refresh(); });
+    });
+
+    // 화면을 떠날 때 마지막 저장 시도
+    window.onbeforeunload = function () { if (ta.value !== lastSent.text || inTitle.value.trim() !== lastSent.title) { localSave(); serverSave(false); } };
+    window.addEventListener('hashchange', function once() { window.removeEventListener('hashchange', once); window.onbeforeunload = null; clearTimeout(timer); if (ta.value !== lastSent.text || inTitle.value.trim() !== lastSent.title) serverSave(false); });
+
+    var roundLabel = mine.nextRound > 1 ? mine.nextRound + '차 글 (고쳐 쓰기)' : '글쓰기';
+    var editor = h('div', { class: 'card' }, [
+      h('div', { class: 'row', style: 'align-items:center' }, [
+        h('h2', { text: roundLabel, style: 'margin:0' }),
+        h('div', { class: 'fit editor-status' }, [counter, saveState])
+      ]),
+      inTitle,
+      ta,
+      condBox,
+      h('div', { class: 'actions', style: 'justify-content:space-between' }, [
+        btnSave,
+        h('a', { href: '#/class', class: 'btn ghost small', text: '← 과제 목록' })
+      ]),
+      btnSubmit
+    ]);
+
+    // 이전 차수 글 (고쳐 쓰기일 때)
+    var prev = null;
+    if (mine.submitted.length) {
+      prev = h('div', { class: 'card' }, [h('h3', { text: '이전에 제출한 글', style: 'margin-top:0' })].concat(mine.submitted.map(function (sv) {
+        return h('details', { class: 'prev-round' }, [
+          h('summary', { text: sv.round + '차 · ' + fmtTime(sv.submittedAt) + ' · ' + sv.charCount + '자' }),
+          h('div', { class: 'essay-view', text: sv.text })
+        ]);
+      })));
+    }
+
+    render(header, editor, prev);
+    refresh();
+    if (!draft.text) ta.focus();
   }
 
   // ───────────────────────────────────────────
@@ -703,6 +868,7 @@
               h('div', { class: 'task-meta', text: bandLabel(t.band) + ' 기준 ' + t.criteria.length + '개 · ' + (taskConditionText(t) || '분량 자유') + ' · ' + String(t.createdAt).slice(0, 10) })
             ]),
             h('div', { class: 'btns' }, [
+              h('a', { href: '#/teacher/class/' + classId + '/tasks/' + t.taskId + '/submissions', class: 'btn small', text: '📄 제출 ' + (t.submittedCount || 0) + (t.draftCount ? ' (+' + t.draftCount + ' 작성 중)' : '') }),
               h('a', { href: '#/teacher/class/' + classId + '/tasks/' + t.taskId, class: 'btn small secondary', text: '수정' }),
               h('button', { class: 'small ' + (closed ? 'secondary' : 'ghost'), text: closed ? '다시 열기' : '닫기', onclick: function (ev) {
                 var b = ev.currentTarget; setBusy(b, true);
@@ -919,6 +1085,109 @@
   }
 
   // ───────────────────────────────────────────
+  // 교사: 과제별 제출 현황
+  // ───────────────────────────────────────────
+  function stateBadge(state) {
+    var cls = state === '제출됨' ? 'badge sub' : state === '피드백완료' ? 'badge done' : state === '작성 중' ? 'badge draft' : 'badge off';
+    return h('span', { class: cls, text: state });
+  }
+
+  function viewSubmissions(classId, taskId) {
+    if (!ssGet(KEYS.teacherPw)) { go('/teacher'); return; }
+    render(h('div', { class: 'card' }, [h('div', { class: 'loading', text: '제출 현황을 불러오는 중…' })]));
+    teacherApi('submission.list', { taskId: taskId })
+      .then(function (d) {
+        var c = d.counts;
+        var summary = h('div', { class: 'count-row' }, [
+          h('div', { class: 'count' }, [h('b', { text: String(c.submitted + c.done) }), h('span', { text: '제출' })]),
+          h('div', { class: 'count' }, [h('b', { text: String(c.draft) }), h('span', { text: '작성 중' })]),
+          h('div', { class: 'count' }, [h('b', { text: String(c.none) }), h('span', { text: '미작성' })]),
+          h('div', { class: 'count' }, [h('b', { text: String(c.total) }), h('span', { text: '전체' })])
+        ]);
+        var table = h('table', { class: 'sub-table' }, [
+          h('thead', {}, [h('tr', {}, [h('th', { text: '번호' }), h('th', { text: '이름' }), h('th', { text: '상태' }), h('th', { text: '차수' }), h('th', { text: '글자' }), h('th', { text: '시각' }), h('th', { text: '' })])]),
+          h('tbody', {}, d.rows.map(function (r) {
+            var canOpen = !!r.submissionId;
+            var tr = h('tr', { class: (r.state === '미작성' ? 'dim' : '') + (canOpen ? ' has-link' : '') }, [
+              h('td', { text: r.no }),
+              h('td', { text: r.name }),
+              h('td', {}, [stateBadge(r.state)]),
+              h('td', { text: r.round ? r.round + '차' : '-' }),
+              h('td', { text: r.charCount ? r.charCount + '자' : '-' }),
+              h('td', { class: 'muted', text: fmtTime(r.submittedAt || r.savedAt) || '-' }),
+              h('td', { class: 'act' }, [canOpen ? h('a', { href: '#/teacher/submission/' + r.submissionId, class: 'btn small secondary', text: '보기' }) : null])
+            ]);
+            if (canOpen) tr.addEventListener('click', function (ev) { if (ev.target.tagName !== 'A') go('/teacher/submission/' + r.submissionId); });
+            return tr;
+          }))
+        ]);
+        var card = h('div', { class: 'card' }, [
+          h('span', { class: 'badge genre', text: d.task.genreLabel }),
+          h('span', { class: 'badge' + (d.task.status === '열림' ? '' : ' off'), text: d.task.status, style: 'margin-left:6px' }),
+          h('h2', { text: d.task.title, style: 'margin-top:8px' }),
+          summary,
+          h('div', { class: 'table-wrap' }, [table]),
+          h('div', { class: 'actions' }, [
+            h('a', { href: '#/teacher/class/' + classId + '/tasks', class: 'btn ghost small', text: '← 과제 목록' }),
+            h('button', { class: 'small secondary', text: '새로고침', onclick: function () { viewSubmissions(classId, taskId); } })
+          ])
+        ]);
+        render(card);
+      })
+      .catch(function (e) { render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/teacher/class/' + classId + '/tasks', class: 'btn ghost small', text: '← 과제 목록' })])); });
+  }
+
+  // ───────────────────────────────────────────
+  // 교사: 제출글 보기
+  // ───────────────────────────────────────────
+  function viewSubmissionDetail(submissionId) {
+    if (!ssGet(KEYS.teacherPw)) { go('/teacher'); return; }
+    render(h('div', { class: 'card' }, [h('div', { class: 'loading', text: '글을 불러오는 중…' })]));
+    teacherApi('submission.get', { submissionId: submissionId })
+      .then(function (d) {
+        var sub = d.submission;
+        var task = d.task;
+        var backHref = task ? '#/teacher/class/' + task.classId + '/tasks/' + task.taskId + '/submissions' : '#/teacher/classes';
+        var actions = [h('a', { href: backHref, class: 'btn ghost small', text: '← 제출 현황' })];
+        if (sub.status === '제출됨') {
+          actions.push(h('button', { class: 'small danger', text: '제출 되돌리기 (학생이 다시 고치게)', onclick: function (ev) {
+            if (!confirm(sub.name + ' 학생의 ' + sub.round + '차 제출을 되돌릴까요? 학생이 다시 고쳐서 제출할 수 있게 돼요.')) return;
+            var b = ev.currentTarget; setBusy(b, true);
+            teacherApi('submission.reopen', { submissionId: submissionId })
+              .then(function () { toast('되돌렸어요. 학생 화면에서 다시 고칠 수 있어요.'); viewSubmissionDetail(submissionId); })
+              .catch(function (e) { toast(e.message, true); setBusy(b, false); });
+          } }));
+        }
+        var card = h('div', { class: 'card' }, [
+          h('div', { class: 'row', style: 'align-items:center' }, [
+            h('div', {}, [
+              h('div', { class: 'muted', text: task ? task.genreLabel + ' · ' + task.title : '' }),
+              h('h2', { text: sub.no + '번 ' + sub.name + ' · ' + sub.round + '차', style: 'margin:4px 0' })
+            ]),
+            h('div', { class: 'fit' }, [stateBadge(sub.status === '임시저장' ? '작성 중' : sub.status)])
+          ]),
+          h('p', { class: 'muted', text: (sub.submittedAt ? '제출 ' + fmtTime(sub.submittedAt) : '마지막 저장 ' + fmtTime(sub.savedAt)) + ' · ' + sub.charCount + '자' }),
+          sub.title ? h('h3', { text: sub.title }) : null,
+          h('div', { class: 'essay-view', text: sub.text || '(아직 쓴 내용이 없어요)' }),
+          task ? h('div', { class: 'feedback-placeholder' }, [h('span', { class: 'big-emoji', text: '🤖' }), 'AI 피드백·단계 판정은 4단계에서 여기에 표시돼요.']) : null,
+          h('div', { class: 'actions' }, actions)
+        ]);
+        var prev = null;
+        var others = d.rounds.filter(function (r) { return r.submissionId !== submissionId; });
+        if (others.length) {
+          prev = h('div', { class: 'card' }, [h('h3', { text: '다른 차수', style: 'margin-top:0' })].concat(others.map(function (r) {
+            return h('details', { class: 'prev-round' }, [
+              h('summary', { text: r.round + '차 · ' + (r.status === '임시저장' ? '작성 중' : r.status) + ' · ' + r.charCount + '자 · ' + fmtTime(r.submittedAt || r.savedAt) }),
+              h('div', { class: 'essay-view', text: r.text })
+            ]);
+          })));
+        }
+        render(card, prev);
+      })
+      .catch(function (e) { render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/teacher/classes', class: 'btn ghost small', text: '← 학급 목록' })])); });
+  }
+
+  // ───────────────────────────────────────────
   // 시작
   // ───────────────────────────────────────────
   readLinkParams();
@@ -926,5 +1195,5 @@
   route();
 
   // 테스트용 노출 (브라우저 콘솔)
-  window.__geulsup = { version: APP_VERSION, parseRoster: parseRoster, extractDeployId: extractDeployId, taskConditionText: taskConditionText, bandForGrade: bandForGrade };
+  window.__geulsup = { version: APP_VERSION, parseRoster: parseRoster, extractDeployId: extractDeployId, taskConditionText: taskConditionText, bandForGrade: bandForGrade, countChars: countChars, conditionChecks: conditionChecks, fmtTime: fmtTime };
 })();
