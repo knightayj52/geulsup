@@ -2,6 +2,7 @@
  * 글숲 (geulsup) — 학생 글쓰기 AI 피드백 앱 · 화면 로직
  * © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
  *
+ * v0.2.1 — 학년군 날짜 변환 버그 수정 (루브릭·과제 시트)
  * v0.2.0 — 2단계: 과제 만들기
  *   - 교사: 학급별 과제 목록 · 과제 만들기/수정(갈래 → 기본 루브릭 자동 불러오기, 기준 편집) · 열기/닫기
  *   - 학생: 열린 과제 목록 · 과제 상세(글감·조건·평가 기준 이름)
@@ -15,7 +16,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '0.2.0';
+  var APP_VERSION = '0.2.1';
 
   // 서버와 같은 목록 (ping/login 응답으로 덮어씀)
   var GENRES = [
@@ -816,6 +817,9 @@
       critBox.appendChild(h('div', { class: 'loading', text: '기본 기준을 불러오는 중…' }));
       teacherApi('rubric.defaults', { genre: genre, band: band })
         .then(function (d) {
+          if (!d.criteria || !d.criteria.length) {
+            throw new Error('루브릭 시트에서 "' + genreLabel(genre) + ' · ' + bandLabel(band) + '" 기준을 찾지 못했어요. 시트 메뉴 🌳 글숲 → "기본 루브릭 다시 넣기"를 실행한 뒤 다시 시도해 주세요.');
+          }
           state.criteria = d.criteria.map(cloneCriterion);
           state.loadedKey = key;
           renderCriteria();
