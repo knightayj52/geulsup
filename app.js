@@ -2,6 +2,9 @@
  * 글숲 (geulsup) — 학생 글쓰기 AI 피드백 앱 · 화면 로직
  * © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
  *
+ * v0.4.0 — 4단계: AI 피드백
+ *   - 학생: 제출 즉시 기준별 성장 단계(씨앗·새싹·나무·열매)·근거·조언, 잘한 점/고쳐 볼 점/다음에 시도, 고칠 곳 → 고쳐 쓰기(다음 차수)
+ *   - 교사: 제출글 화면에 AI 결과 표시, 다시 채점, AI 연결 테스트
  * v0.3.0 — 3단계: 글쓰기·제출
  *   - 학생: 글쓰기 편집기(글자 수·조건 체크·자동 임시 저장·제출), 제출한 글 보기
  *   - 교사: 과제별 제출 현황 · 글 열람 · 제출 되돌리기
@@ -19,7 +22,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '0.3.0';
+  var APP_VERSION = '0.4.0';
 
   // 서버와 같은 목록 (ping/login 응답으로 덮어씀)
   var GENRES = [
@@ -371,17 +374,25 @@
       h('div', { class: 'chips', style: 'margin-top:6px' }, [h('span', { class: 'muted', text: '선생님이 보는 기준: ' })].concat(t.criteriaNames.map(function (n) { return h('span', { class: 'badge', text: n }); })))
     ]);
 
-    // ── 제출된 글 (잠김 상태) ──
+    // ── 제출됐지만 아직 피드백이 없는 상태 (AI 실패 등) → 다시 요청 ──
     if (mine.locked) {
       var last = mine.submitted[mine.submitted.length - 1];
+      var btnFb = h('button', { class: 'big', text: '피드백 받기 🤖' });
+      btnFb.addEventListener('click', function () {
+        setBusy(btnFb, true, 'AI가 글을 읽는 중… (30초쯤 걸려요)');
+        api('feedback.request', studentPayload({ taskId: taskId, submissionId: last.submissionId }))
+          .then(function () { toast('피드백이 도착했어요!'); viewStudentTask(taskId); })
+          .catch(function (e) { toast(e.message, true); setBusy(btnFb, false); });
+      });
       var done = h('div', { class: 'card' }, [
         h('div', { class: 'submitted-banner' }, [
           h('span', { class: 'big-emoji', text: '🌿' }),
           h('div', {}, [
             h('div', { style: 'font-weight:700;font-size:17px', text: last.round + '차 글을 제출했어요!' }),
-            h('div', { class: 'muted', text: fmtTime(last.submittedAt) + ' · ' + last.charCount + '자 · 선생님과 AI의 피드백을 기다리는 중이에요.' })
+            h('div', { class: 'muted', text: fmtTime(last.submittedAt) + ' · ' + last.charCount + '자 · 아직 피드백이 만들어지지 않았어요. 아래 버튼을 눌러 보세요.' })
           ])
         ]),
+        btnFb,
         last.title ? h('h3', { text: last.title }) : null,
         h('div', { class: 'essay-view', text: last.text }),
         h('div', { class: 'actions' }, [h('a', { href: '#/class', class: 'btn ghost small', text: '← 과제 목록' })])
@@ -390,10 +401,20 @@
       return;
     }
 
+    // ── 최근 피드백 (고쳐 쓰기 전에 보여 줌) ──
+    var latestSub = mine.submitted.length ? mine.submitted[mine.submitted.length - 1] : null;
+    var fbCard = latestSub && latestSub.feedback ? renderFeedback(latestSub.feedback, latestSub, { forStudent: true }) : null;
+
     // ── 편집기 ──
     var local = null;
     try { local = JSON.parse(lsGet(draftKey(taskId), 'null')); } catch (e) { local = null; }
     var draft = mine.draft || { title: '', text: '', savedAt: '' };
+    var prefilled = false;
+    if (!mine.draft && latestSub && mine.nextRound > 1) {
+      // 고쳐 쓰기: 이전 글을 그대로 가져와 고치게 함 (입력해야 저장됨)
+      draft = { title: latestSub.title || '', text: latestSub.text || '', savedAt: '' };
+      prefilled = true;
+    }
     // 서버 저장본보다 이 기기의 임시본이 더 최근이면 그걸 씁니다 (전송 실패 대비)
     if (local && local.at && (!draft.savedAt || local.at > draft.savedAt) && (local.text !== draft.text || local.title !== draft.title)) {
       draft = { title: local.title || '', text: local.text || '', savedAt: draft.savedAt };
@@ -408,7 +429,7 @@
     var btnSave = h('button', { class: 'small secondary', text: '지금 저장' });
     var btnSubmit = h('button', { class: 'big', text: '제출하기 🌳' });
 
-    var dirty = false, saving = false, timer = null, lastSent = { title: draft.title, text: draft.text };
+    var dirty = false, saving = false, timer = null, lastSent = prefilled ? { title: null, text: null } : { title: draft.title, text: draft.text };
 
     function refresh() {
       var text = ta.value;
@@ -466,10 +487,12 @@
       if (!confirm('제출하면 피드백을 받을 때까지 고칠 수 없어요.\n' + n + '자 · 제출할까요?')) return;
       clearTimeout(timer);
       setBusy(btnSubmit, true, '제출하는 중…');
+      setBusy(btnSubmit, true, '제출하고 AI가 글을 읽는 중… (30초쯤 걸려요)');
       api('submission.submit', studentPayload({ taskId: taskId, title: inTitle.value.trim(), text: text }))
-        .then(function () {
+        .then(function (d) {
           lsDel(draftKey(taskId));
-          toast('제출했어요! 🌳');
+          if (d.feedback) toast('제출했어요! 피드백이 도착했어요 🌳');
+          else toast('제출했어요. 피드백은 조금 뒤에 다시 받아 보세요. ' + (d.feedbackError || ''), true);
           viewStudentTask(taskId);
         })
         .catch(function (e) { toast(e.message, true); setBusy(btnSubmit, false); refresh(); });
@@ -479,12 +502,13 @@
     window.onbeforeunload = function () { if (ta.value !== lastSent.text || inTitle.value.trim() !== lastSent.title) { localSave(); serverSave(false); } };
     window.addEventListener('hashchange', function once() { window.removeEventListener('hashchange', once); window.onbeforeunload = null; clearTimeout(timer); if (ta.value !== lastSent.text || inTitle.value.trim() !== lastSent.title) serverSave(false); });
 
-    var roundLabel = mine.nextRound > 1 ? mine.nextRound + '차 글 (고쳐 쓰기)' : '글쓰기';
+    var roundLabel = mine.nextRound > 1 ? mine.nextRound + '차 · 고쳐 쓰기 ✍️' : '글쓰기';
     var editor = h('div', { class: 'card' }, [
       h('div', { class: 'row', style: 'align-items:center' }, [
         h('h2', { text: roundLabel, style: 'margin:0' }),
         h('div', { class: 'fit editor-status' }, [counter, saveState])
       ]),
+      prefilled ? h('p', { class: 'hint', text: '이전에 쓴 글을 그대로 가져왔어요. 피드백을 보고 고쳐서 다시 제출해 보세요.' }) : null,
       inTitle,
       ta,
       condBox,
@@ -500,13 +524,13 @@
     if (mine.submitted.length) {
       prev = h('div', { class: 'card' }, [h('h3', { text: '이전에 제출한 글', style: 'margin-top:0' })].concat(mine.submitted.map(function (sv) {
         return h('details', { class: 'prev-round' }, [
-          h('summary', { text: sv.round + '차 · ' + fmtTime(sv.submittedAt) + ' · ' + sv.charCount + '자' }),
+          h('summary', { text: sv.round + '차 · ' + fmtTime(sv.submittedAt) + ' · ' + sv.charCount + '자' + (sv.feedback ? ' · ' + levelSummary(sv.feedback) : '') }),
           h('div', { class: 'essay-view', text: sv.text })
         ]);
       })));
     }
 
-    render(header, editor, prev);
+    render(header, fbCard, editor, prev);
     refresh();
     if (!draft.text) ta.focus();
   }
@@ -664,6 +688,17 @@
         statusBox.appendChild(h('li', {}, [h('span', { class: d.checks.apiKey ? 'ok' : 'bad', text: d.checks.apiKey ? '✅' : '❌' }), ' Gemini API 키 ' + (d.checks.apiKey ? '등록됨 (' + d.teacher.model + ')' : '없음 — 설정 시트에 입력하세요')]));
         statusBox.appendChild(h('li', {}, [h('span', { class: 'ok', text: '✅' }), ' 교사 비밀번호 설정됨']));
         statusBox.appendChild(h('li', {}, [h('span', { class: d.checks.rubrics ? 'ok' : 'bad', text: d.checks.rubrics ? '✅' : '❌' }), ' 기본 루브릭 ' + (d.checks.rubrics ? '준비됨 (루브릭 시트에서 문구 수정 가능)' : '없음 — 시트 메뉴 → 기본 루브릭 다시 넣기')]));
+        if (d.checks.apiKey) {
+          var aiLine = h('span', { class: 'muted', text: '' });
+          var btnAi = h('button', { class: 'small secondary', text: 'AI 연결 테스트', onclick: function () {
+            setBusy(btnAi, true, '확인 중…');
+            teacherApi('ai.test')
+              .then(function (r) { aiLine.textContent = '✅ ' + r.model + ' 응답: "' + r.reply + '" (' + (r.ms / 1000).toFixed(1) + '초)'; })
+              .catch(function (e) { aiLine.textContent = '❌ ' + e.message; aiLine.className = 'bad'; })
+              .then(function () { setBusy(btnAi, false); });
+          } });
+          statusBox.appendChild(h('li', {}, [btnAi, aiLine]));
+        }
         if (d.teacher.name || d.teacher.school) {
           statusBox.appendChild(h('li', {}, [h('span', { class: 'muted', text: '👩‍🏫 ' + [d.teacher.school, d.teacher.name].filter(Boolean).join(' · ') })]));
         }
@@ -1169,22 +1204,151 @@
           h('p', { class: 'muted', text: (sub.submittedAt ? '제출 ' + fmtTime(sub.submittedAt) : '마지막 저장 ' + fmtTime(sub.savedAt)) + ' · ' + sub.charCount + '자' }),
           sub.title ? h('h3', { text: sub.title }) : null,
           h('div', { class: 'essay-view', text: sub.text || '(아직 쓴 내용이 없어요)' }),
-          task ? h('div', { class: 'feedback-placeholder' }, [h('span', { class: 'big-emoji', text: '🤖' }), 'AI 피드백·단계 판정은 4단계에서 여기에 표시돼요.']) : null,
           h('div', { class: 'actions' }, actions)
         ]);
+        var fbCard = null;
+        if (sub.status !== '임시저장') {
+          var btnRegen = h('button', { class: 'small secondary', text: sub.feedback ? '🔄 다시 채점' : '🤖 AI 채점 실행', onclick: function (ev) {
+            if (sub.feedback && !confirm('AI 피드백을 다시 만들까요? 기존 AI 결과는 덮어써요. (교사 한마디·최종 단계는 유지)')) return;
+            var b = ev.currentTarget; setBusy(b, true, 'AI가 읽는 중…');
+            teacherApi('feedback.regenerate', { submissionId: submissionId })
+              .then(function () { toast('AI 피드백을 만들었어요.'); viewSubmissionDetail(submissionId); })
+              .catch(function (e) { toast(e.message, true); setBusy(b, false); });
+          } });
+          fbCard = sub.feedback
+            ? renderFeedback(sub.feedback, sub, { forStudent: false, extraActions: [btnRegen] })
+            : h('div', { class: 'card' }, [
+                h('div', { class: 'feedback-placeholder' }, [h('span', { class: 'big-emoji', text: '🤖' }), '아직 AI 피드백이 없어요. (제출 때 AI 호출이 실패했을 수 있어요)']),
+                h('div', { class: 'actions' }, [btnRegen])
+              ]);
+        }
         var prev = null;
         var others = d.rounds.filter(function (r) { return r.submissionId !== submissionId; });
         if (others.length) {
           prev = h('div', { class: 'card' }, [h('h3', { text: '다른 차수', style: 'margin-top:0' })].concat(others.map(function (r) {
             return h('details', { class: 'prev-round' }, [
-              h('summary', { text: r.round + '차 · ' + (r.status === '임시저장' ? '작성 중' : r.status) + ' · ' + r.charCount + '자 · ' + fmtTime(r.submittedAt || r.savedAt) }),
+              h('summary', { text: r.round + '차 · ' + (r.status === '임시저장' ? '작성 중' : r.status) + ' · ' + r.charCount + '자 · ' + fmtTime(r.submittedAt || r.savedAt) + (r.feedback ? ' · ' + levelSummary(r.feedback) : '') }),
               h('div', { class: 'essay-view', text: r.text })
             ]);
           })));
         }
-        render(card, prev);
+        render(card, fbCard, prev);
       })
       .catch(function (e) { render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/teacher/classes', class: 'btn ghost small', text: '← 학급 목록' })])); });
+  }
+
+  // ───────────────────────────────────────────
+  // 피드백 렌더러 (학생·교사 공용)
+  // ───────────────────────────────────────────
+  var LEVELS = [
+    { n: 0, name: '?',   emoji: '❔', cls: 'lv0' },
+    { n: 1, name: '씨앗', emoji: '🌰', cls: 'lv1' },
+    { n: 2, name: '새싹', emoji: '🌱', cls: 'lv2' },
+    { n: 3, name: '나무', emoji: '🌳', cls: 'lv3' },
+    { n: 4, name: '열매', emoji: '🍎', cls: 'lv4' }
+  ];
+  function lv(n) { return LEVELS[Math.max(0, Math.min(4, Number(n) || 0))]; }
+  function effectiveLevel(fb, c) {
+    // 교사가 최종 단계를 정했으면 그것이 우선 (5단계)
+    var f = fb.finalLevels && fb.finalLevels[c.id];
+    return f ? { level: Number(f), overridden: true } : { level: c.level, overridden: false };
+  }
+  function levelSummary(fb) {
+    return (fb.criteria || []).map(function (c) { return lv(effectiveLevel(fb, c).level).emoji; }).join('');
+  }
+
+  function renderFeedback(fb, sub, opts) {
+    opts = opts || {};
+    var forStudent = !!opts.forStudent;
+    var who = forStudent ? '' : (sub.no + '번 ' + sub.name + ' · ');
+
+    // 단계 그리드
+    var grid = h('div', { class: 'level-grid' }, (fb.criteria || []).map(function (c) {
+      var e = effectiveLevel(fb, c);
+      var L = lv(e.level);
+      var card = h('div', { class: 'level-card ' + L.cls }, [
+        h('div', { class: 'level-emoji', text: L.emoji }),
+        h('div', { class: 'level-name', text: c.name }),
+        h('div', { class: 'level-label', text: e.level ? e.level + '단계 ' + L.name : '판정 없음' }),
+        e.overridden ? h('div', { class: 'level-teacher', text: '선생님 판정' }) : null
+      ]);
+      return card;
+    }));
+
+    // 기준별 상세 (펼침)
+    var details = h('div', { class: 'crit-fb-list' }, (fb.criteria || []).map(function (c) {
+      var e = effectiveLevel(fb, c);
+      var L = lv(e.level);
+      return h('details', { class: 'crit-fb' }, [
+        h('summary', {}, [h('span', { class: 'lv-dot ' + L.cls, text: L.emoji }), ' ', h('b', { text: c.name }), ' · ' + (e.level ? e.level + '단계' : '판정 없음') + (e.overridden ? ' (선생님)' : '')]),
+        h('div', { class: 'crit-fb-body' }, [
+          c.evidence ? h('div', { class: 'fb-quote' }, [h('span', { class: 'fb-quote-label', text: '글에서' }), h('span', { text: '"' + c.evidence + '"' })]) : null,
+          c.reason ? h('p', { text: c.reason }) : null,
+          c.tip ? h('p', { class: 'fb-tip' }, [h('b', { text: '다음 단계로 → ' }), c.tip]) : null
+        ])
+      ]);
+    }));
+
+    function list(title, items, cls) {
+      if (!items || !items.length) return null;
+      return h('div', { class: 'fb-block ' + cls }, [h('h3', { text: title }), h('ul', {}, items.map(function (x) { return h('li', { text: x }); }))]);
+    }
+
+    var corrections = null;
+    if (fb.corrections && fb.corrections.length) {
+      corrections = h('div', { class: 'fb-block fb-corr' }, [
+        h('h3', { text: '✏️ 고칠 곳 (' + fb.corrections.length + ')' }),
+        h('div', { class: 'corr-list' }, fb.corrections.map(function (x) {
+          return h('div', { class: 'corr' }, [
+            h('span', { class: 'corr-kind', text: x.kind }),
+            h('span', { class: 'corr-orig', text: x.original }),
+            h('span', { class: 'corr-arrow', text: '→' }),
+            h('span', { class: 'corr-fixed', text: x.fixed })
+          ]);
+        })),
+        forStudent ? h('p', { class: 'hint', text: 'AI가 찾은 것이라 틀릴 수도 있어요. 이상하면 선생님께 물어보세요.' }) : null
+      ]);
+    }
+
+    var growth = null;
+    if (fb.growth && fb.growth.items && fb.growth.items.length) {
+      growth = h('div', { class: 'fb-block fb-growth' }, [
+        h('h3', { text: '🌿 지난 글보다 얼마나 자랐을까?' }),
+        fb.growth.summary ? h('p', { text: fb.growth.summary }) : null,
+        h('div', { class: 'growth-list' }, fb.growth.items.map(function (g) {
+          var up = g.after > g.before, down = g.after < g.before;
+          return h('div', { class: 'growth-row' }, [
+            h('span', { class: 'growth-name', text: g.name }),
+            h('span', { class: 'growth-steps' }, [lv(g.before).emoji + ' ' + (g.before || '?') + ' → ' + lv(g.after).emoji + ' ' + (g.after || '?')]),
+            h('span', { class: 'growth-delta ' + (up ? 'up' : down ? 'down' : ''), text: up ? '▲ 올라갔어요' : down ? '▼ 내려갔어요' : '그대로' }),
+            g.comment ? h('div', { class: 'growth-comment', text: g.comment }) : null
+          ]);
+        }))
+      ]);
+    }
+
+    var teacherNote = fb.teacherNote ? h('div', { class: 'fb-block fb-teacher' }, [h('h3', { text: '👩‍🏫 선생님 한마디' }), h('p', { text: fb.teacherNote })]) : null;
+
+    var head = h('div', { class: 'fb-head' }, [
+      h('div', {}, [
+        h('div', { class: 'muted', text: who + sub.round + '차 피드백 · ' + fmtTime(fb.createdAt) + (forStudent ? '' : ' · ' + (fb.model || '')) }),
+        h('h2', { text: forStudent ? '🤖 AI 선생님의 피드백' : 'AI 피드백', style: 'margin:4px 0 0' })
+      ]),
+      opts.extraActions ? h('div', { class: 'fit actions', style: 'margin:0' }, opts.extraActions) : null
+    ]);
+
+    return h('div', { class: 'card fb-card' }, [
+      head,
+      fb.summary ? h('div', { class: 'fb-summary', text: fb.summary }) : null,
+      grid,
+      details,
+      growth,
+      list('👍 잘한 점', fb.strengths, 'fb-good'),
+      list('🔧 고쳐 볼 점', fb.improvements, 'fb-fix'),
+      fb.nextTry ? h('div', { class: 'fb-block fb-next' }, [h('h3', { text: '🎯 다음에 꼭 해 볼 한 가지' }), h('p', { text: fb.nextTry })]) : null,
+      corrections,
+      teacherNote
+    ]);
   }
 
   // ───────────────────────────────────────────
@@ -1195,5 +1359,5 @@
   route();
 
   // 테스트용 노출 (브라우저 콘솔)
-  window.__geulsup = { version: APP_VERSION, parseRoster: parseRoster, extractDeployId: extractDeployId, taskConditionText: taskConditionText, bandForGrade: bandForGrade, countChars: countChars, conditionChecks: conditionChecks, fmtTime: fmtTime };
+  window.__geulsup = { version: APP_VERSION, parseRoster: parseRoster, extractDeployId: extractDeployId, taskConditionText: taskConditionText, bandForGrade: bandForGrade, countChars: countChars, conditionChecks: conditionChecks, fmtTime: fmtTime, levelSummary: levelSummary };
 })();

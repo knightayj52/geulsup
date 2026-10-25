@@ -227,5 +227,59 @@ a.task-item:active { transform: translateY(1px); }
 .badge.done { background: var(--forest-700); color: #fff; }
 .badge.draft { background: #e8f0fb; color: #22508a; }
 
+/* ───── AI 피드백 ───── */
+.fb-card { border: 2px solid var(--leaf); }
+.fb-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.fb-summary {
+  margin: 14px 0 6px; padding: 14px 16px; border-radius: 12px; background: #fff8e6; border-left: 4px solid var(--sun);
+  line-height: 1.8; font-size: 15px;
+}
+.level-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; margin: 14px 0 10px; }
+.level-card { border-radius: 14px; padding: 12px 8px; text-align: center; border: 1.5px solid var(--line); background: #fff; }
+.level-emoji { font-size: 30px; line-height: 1.1; }
+.level-name { font-weight: 700; font-size: 14px; margin-top: 6px; color: var(--forest-900); }
+.level-label { font-size: 12px; color: var(--ink-soft); margin-top: 2px; }
+.level-teacher { font-size: 11px; color: #8a5a00; margin-top: 4px; }
+.level-card.lv1 { background: #faf3ea; border-color: #e8d7c0; }
+.level-card.lv2 { background: #eef8ef; border-color: #cfe9d3; }
+.level-card.lv3 { background: #e3f2ea; border-color: var(--leaf); }
+.level-card.lv4 { background: #fdeeee; border-color: #f5c6c6; }
+.level-card.lv0 { background: #f3f3f3; border-color: #ddd; }
+.lv-dot { display: inline-block; width: 24px; text-align: center; }
+
+.crit-fb-list { display: grid; gap: 6px; margin-bottom: 8px; }
+.crit-fb { border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; background: #fff; }
+.crit-fb summary { cursor: pointer; font-size: 15px; }
+.crit-fb-body { padding: 8px 0 2px; font-size: 15px; line-height: 1.7; }
+.crit-fb-body p { margin: 6px 0; }
+.fb-quote { background: var(--paper); border-left: 3px solid var(--leaf); padding: 8px 12px; border-radius: 8px; font-size: 14px; color: #3f4a44; margin: 4px 0 8px; }
+.fb-quote-label { display: inline-block; font-size: 11px; color: var(--forest-700); font-weight: 700; margin-right: 6px; vertical-align: top; }
+.fb-tip { background: #fff8e6; border-radius: 8px; padding: 8px 12px; }
+
+.fb-block { margin-top: 14px; padding: 12px 16px; border-radius: 12px; background: var(--paper); border: 1px solid var(--line); }
+.fb-block h3 { margin: 0 0 6px; font-size: 15px; }
+.fb-block ul { margin: 0; padding-left: 20px; line-height: 1.8; font-size: 15px; }
+.fb-block p { margin: 0; line-height: 1.8; font-size: 15px; }
+.fb-good { background: #eef8ef; }
+.fb-fix { background: #fff4f0; }
+.fb-next { background: #fff8e6; border-color: #f2dfa8; }
+.fb-teacher { background: #eef1fb; border-color: #cdd6f3; }
+.fb-growth { background: #f0faf3; }
+
+.corr-list { display: grid; gap: 6px; }
+.corr { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 15px; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+.corr-kind { font-size: 11px; background: #eee; color: #666; padding: 2px 8px; border-radius: 999px; }
+.corr-orig { color: var(--danger); text-decoration: line-through; }
+.corr-arrow { color: var(--ink-soft); }
+.corr-fixed { color: var(--forest-700); font-weight: 700; }
+
+.growth-list { display: grid; gap: 8px; margin-top: 6px; }
+.growth-row { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 10px; align-items: center; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 14px; }
+.growth-name { font-weight: 700; color: var(--forest-900); }
+.growth-delta { font-size: 12px; color: var(--ink-soft); }
+.growth-delta.up { color: var(--forest-500); font-weight: 700; }
+.growth-delta.down { color: var(--danger); font-weight: 700; }
+.growth-comment { grid-column: 1 / -1; color: #3f4a44; font-size: 14px; line-height: 1.6; }
+
 .muted { color: var(--ink-soft); font-size: 13px; }
 .center { text-align: center; }
