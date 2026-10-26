@@ -2,6 +2,7 @@
  * 글숲 (geulsup) — 학생 글쓰기 AI 피드백 앱 · 화면 로직
  * © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
  *
+ * v0.6.0 — 개인 인증 · 저장 버전 관리 · 글쓰기/피드백 작업 공간
  * v0.5.0 — 5단계: 교사 피드백 한눈에
  *   - 제출 현황: 학생별 단계 이모지 · 총평/다음에 시도 펼쳐 보기 · 학급 통계(기준별 분포, 평균, 고칠 곳 유형)
  *   - 제출글 보기: 교사 한마디 · 기준별 최종 단계 조정 (학생 화면에 '선생님 판정'으로 표시)
@@ -26,7 +27,11 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '0.5.0';
+  var APP_VERSION = '0.6.0';
+  var editorLifecycle = null;
+  var submissionNavigation = [];
+  var teacherNoteCleanup = null;
+  var routeVersion = 0;
 
   // 서버와 같은 목록 (ping/login 응답으로 덮어씀)
   var GENRES = [
@@ -51,9 +56,9 @@
   // ───────────────────────────────────────────
   var KEYS = {
     apiId:     'geulsup_api_id',      // localStorage: GAS 배포 ID
-    student:   'geulsup_student',     // localStorage: 입장한 학생 정보
+    student:   'geulsup_student_v2', // sessionStorage: 학생 인증 세션
     pendCode:  'geulsup_pending_code',// localStorage: 링크로 받은 학급 코드(입장 전)
-    teacherPw: 'geulsup_teacher_pw'   // sessionStorage: 교사 비밀번호(브라우저 닫으면 사라짐)
+    teacherToken: 'geulsup_teacher_token' // sessionStorage: 교사 인증 토큰 (비밀번호 저장 안 함)
   };
 
   var $app = document.getElementById('app');
@@ -66,14 +71,14 @@
   function lsGet(k, fallback) {
     try { var v = localStorage.getItem(k); return v === null ? fallback : v; } catch (e) { return fallback; }
   }
-  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* 무시 */ } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
   function lsDel(k) { try { localStorage.removeItem(k); } catch (e) { /* 무시 */ } }
   function ssGet(k) { try { return sessionStorage.getItem(k) || ''; } catch (e) { return ''; } }
   function ssSet(k, v) { try { sessionStorage.setItem(k, v); } catch (e) { /* 무시 */ } }
   function ssDel(k) { try { sessionStorage.removeItem(k); } catch (e) { /* 무시 */ } }
 
   function getStudent() {
-    try { return JSON.parse(lsGet(KEYS.student, 'null')); } catch (e) { return null; }
+    try { return JSON.parse(ssGet(KEYS.student) || 'null'); } catch (e) { return null; }
   }
 
   // ───────────────────────────────────────────
@@ -109,7 +114,7 @@
 
   function setBusy(btn, busy, labelBusy) {
     if (!btn) return;
-    if (busy) { btn.dataset.label = btn.textContent; btn.textContent = labelBusy || '잠시만요…'; btn.disabled = true; }
+    if (busy) { if (!btn.disabled) btn.dataset.label = btn.textContent; btn.textContent = labelBusy || '잠시만요…'; btn.disabled = true; }
     else { btn.textContent = btn.dataset.label || btn.textContent; btn.disabled = false; }
   }
 
@@ -125,11 +130,14 @@
   }
   function apiUrl(id) { return 'https://script.google.com/macros/s/' + id + '/exec'; }
 
-  function api(action, payload) {
-    var id = lsGet(KEYS.apiId, '');
+  function api(action, payload, serverId) {
+    var id = serverId || lsGet(KEYS.apiId, '');
     if (!id) return Promise.reject(new Error('서버가 연결되어 있지 않아요. 교사 화면에서 배포 URL을 등록해 주세요.'));
     var body = Object.assign({ action: action }, payload || {});
+    var controller = new AbortController();
+    var timeout = setTimeout(function () { controller.abort(); }, /submit|feedback|ai.test/.test(action) ? 180000 : 30000);
     return fetch(apiUrl(id), {
+      signal: controller.signal,
       method: 'POST',
       // text/plain 으로 보내야 브라우저가 preflight 없이 GAS로 보냅니다
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -142,10 +150,13 @@
         try { j = JSON.parse(t); } catch (e) { throw new Error('서버 응답을 읽을 수 없어요. 배포 설정(액세스: 모든 사용자)을 확인해 주세요.'); }
         if (!j.ok) throw new Error(j.error || '알 수 없는 오류');
         return j.data;
-      });
+      }).catch(function (e) {
+        if (e.name === 'AbortError') throw new Error('응답을 기다리는 시간이 길어졌어요. 저장·제출이 완료됐을 수 있으니 다시 열어 상태를 확인해 주세요.');
+        throw e;
+      }).finally(function () { clearTimeout(timeout); });
   }
   function teacherApi(action, payload) {
-    return api(action, Object.assign({ pw: ssGet(KEYS.teacherPw) }, payload || {}));
+    return api(action, Object.assign({ token: ssGet(KEYS.teacherToken) }, payload || {}));
   }
 
   // ───────────────────────────────────────────
@@ -158,8 +169,8 @@
     var s = q.get('s');
     var c = q.get('c');
     var touched = false;
-    if (s && extractDeployId(s)) { lsSet(KEYS.apiId, extractDeployId(s)); touched = true; }
-    if (c) { lsSet(KEYS.pendCode, c.toUpperCase()); touched = true; }
+    if (s && extractDeployId(s)) { if (extractDeployId(s) !== lsGet(KEYS.apiId, '')) { ssDel(KEYS.student); ssDel(KEYS.teacherToken); } lsSet(KEYS.apiId, extractDeployId(s)); touched = true; }
+    if (c) { var oldStudent = getStudent(); if (oldStudent && oldStudent.code !== c.toUpperCase()) ssDel(KEYS.student); lsSet(KEYS.pendCode, c.toUpperCase()); touched = true; }
     if (touched) {
       // 주소를 깨끗하게 (뒤로가기 해도 파라미터가 다시 안 붙도록)
       history.replaceState(null, '', location.pathname + (location.hash || '#/'));
@@ -167,8 +178,12 @@
   }
 
   function route() {
+    routeVersion++;
+    if (teacherNoteCleanup) { teacherNoteCleanup(); teacherNoteCleanup = null; }
+    if (editorLifecycle) { editorLifecycle.dispose(); editorLifecycle = null; }
     var hash = location.hash || '#/';
     var path = hash.replace(/^#/, '');
+    $app.className = 'app' + (path.indexOf('/teacher') === 0 ? ' teacher-app' : '');
     renderTopbar(path);
     if (path === '/' || path === '') return viewHome();
     if (path === '/teacher') return viewTeacher();
@@ -193,16 +208,33 @@
     var student = getStudent();
     if (path.indexOf('/teacher') === 0) {
       $topRight.appendChild(h('span', { class: 'chip', text: '교사 모드' }));
-      if (ssGet(KEYS.teacherPw)) {
-        $topRight.appendChild(h('button', { class: 'small', text: '나가기', onclick: function () { ssDel(KEYS.teacherPw); go('/'); } }));
+      if (ssGet(KEYS.teacherToken)) {
+        $topRight.appendChild(h('button', { class: 'small', text: '사용 마치기', onclick: function () { leaveSession('teacher'); } }));
       }
     } else if (student && path.indexOf('/class') === 0) {
       $topRight.appendChild(h('span', { class: 'chip', text: student.className + ' · ' + student.no + '번 ' + student.name }));
-      $topRight.appendChild(h('button', { class: 'small', text: '나가기', onclick: function () { lsDel(KEYS.student); go('/'); } }));
+      $topRight.appendChild(h('button', { class: 'small', text: '사용 마치기', onclick: function () { leaveSession('student'); } }));
     } else {
       $topRight.appendChild(h('a', { href: '#/teacher', class: 'btn small ghost', text: '교사 모드', style: 'color:#fff;border-color:rgba(255,255,255,.6)' }));
     }
   }
+
+  function leaveSession(role) {
+    var token = role === 'teacher' ? ssGet(KEYS.teacherToken) : (getStudent() || {}).token;
+    if (editorLifecycle && editorLifecycle.dirty() && !confirm('아직 서버에 저장되지 않은 글이 있어요. 이 기기의 임시 글도 지우고 사용을 마칠까요? 취소하면 글을 복사하거나 저장할 수 있어요.')) return;
+    if (editorLifecycle) { editorLifecycle.dispose(false, true); editorLifecycle = null; }
+    if (token) api('auth.logout', { token: token }).catch(function () {});
+    if (role === 'student') {
+      var st = getStudent();
+      if (st) {
+        var prefix = 'geulsup_draft_' + lsGet(KEYS.apiId, '') + '_' + st.classId + '_' + st.no + '_';
+        try { Object.keys(localStorage).forEach(function (k) { if (k.indexOf(prefix) === 0 || k.indexOf('geulsup_draft_' + st.classId + '_' + st.no + '_') === 0) lsDel(k); }); } catch (e) {}
+      }
+      ssDel(KEYS.student);
+    } else ssDel(KEYS.teacherToken);
+    go('/');
+  }
+  function checkProtocol(d) { if (!d || d.protocol !== 2) throw new Error('서버 업데이트가 필요해요. 선생님이 Code.gs v0.6.0을 적용한 뒤 기존 웹 앱을 새 버전으로 배포해 주세요.'); }
 
   // ───────────────────────────────────────────
   // 홈 (학생 입장)
@@ -216,7 +248,8 @@
 
     var inCode = h('input', { type: 'text', placeholder: '예: ABC234', maxlength: '6', autocapitalize: 'characters', value: pendCode, style: 'letter-spacing:3px;text-transform:uppercase;font-weight:700' });
     var inNo = h('input', { type: 'text', inputmode: 'numeric', placeholder: '예: 12' });
-    var inName = h('input', { type: 'text', placeholder: '예: 김글숲' });
+    var inName = h('input', { type: 'text', placeholder: '예: 김글숲', 'aria-label': '이름' });
+    var inPin = h('input', { type: 'password', placeholder: '선생님이 나에게 준 개인 입장 코드', autocomplete: 'off', 'aria-label': '개인 입장 코드' });
     var btn = h('button', { class: 'big', text: '글숲에 들어가기 🌳' });
 
     function join() {
@@ -227,9 +260,9 @@
       if (!no || !name) return toast('번호와 이름을 입력해 주세요.', true);
       if (!hasApi) return toast('선생님이 보내 준 학급 링크로 들어와야 해요.', true);
       setBusy(btn, true, '확인하는 중…');
-      api('student.join', { code: code, no: no, name: name })
+      api('ping').then(function (d) { checkProtocol(d); return api('student.join', { code: code, no: no, name: name, pin: inPin.value.trim() }); })
         .then(function (d) {
-          lsSet(KEYS.student, JSON.stringify({ classId: d.classId, className: d.className, grade: d.grade, no: d.student.no, name: d.student.name, code: code }));
+          ssSet(KEYS.student, JSON.stringify({ token: d.token, classId: d.classId, className: d.className, grade: d.grade, no: d.student.no, name: d.student.name, code: code }));
           lsDel(KEYS.pendCode);
           toast('환영해요, ' + d.student.name + '!');
           go('/class');
@@ -238,7 +271,7 @@
         .then(function () { setBusy(btn, false); });
     }
     btn.addEventListener('click', join);
-    [inCode, inNo, inName].forEach(function (i) { i.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') join(); }); });
+    [inCode, inNo, inName, inPin].forEach(function (i) { i.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') join(); }); });
 
     var hero = h('div', { class: 'hero' }, [
       h('h1', { text: '🌳 글숲' }),
@@ -253,6 +286,8 @@
         h('div', {}, [h('label', { text: '번호' }), inNo]),
         h('div', {}, [h('label', { text: '이름' }), inName])
       ]),
+      h('label', { text: '개인 입장 코드' }), inPin,
+      h('p', { class: 'hint', text: '내 코드는 친구에게 알려 주지 않아요. 활동이 끝나면 위쪽의 사용 마치기를 눌러 주세요.' }),
       btn,
       !hasApi ? h('p', { class: 'hint center', text: '아직 서버가 연결되지 않았어요. 선생님이 보내 준 학급 링크(QR)로 들어오면 자동으로 연결돼요.' }) : null
     ]);
@@ -268,7 +303,7 @@
 
   function fetchStudentTasks() {
     var s = getStudent();
-    return api('task.listForStudent', { classId: s.classId, code: s.code }).then(function (d) {
+    return api('task.listForStudent', { token: s.token }).then(function (d) {
       studentTaskCache = {};
       d.tasks.forEach(function (t) { studentTaskCache[t.taskId] = t; });
       return d.tasks;
@@ -311,17 +346,18 @@
           list.appendChild(h('a', { href: '#/class/task/' + t.taskId, class: 'task-item' }, [
             h('div', {}, [
               h('span', { class: 'badge genre', text: t.genreLabel }),
+              h('span', { class: 'badge progress', text: t.progress || '시작 전' }),
               h('div', { class: 'task-title', text: t.title }),
               h('div', { class: 'task-meta', text: taskConditionText(t) || '분량 자유' })
             ]),
-            h('div', { class: 'task-go', text: '글 쓰러 가기 →' })
+            h('div', { class: 'task-go', text: t.progress === '완료' ? '내 글 보기 →' : t.progress === '피드백 대기' ? '피드백 확인 →' : t.progress === '작성 중' ? '이어서 쓰기 →' : t.progress === '피드백 도착' ? '고쳐 쓰기 →' : '글 쓰러 가기 →' })
           ]));
         });
       })
       .catch(function (e) {
         clear(list);
         list.appendChild(h('p', { class: 'bad', text: e.message }));
-        if (/다시 들어와/.test(e.message)) { lsDel(KEYS.student); }
+        if (/다시 들어와/.test(e.message)) { ssDel(KEYS.student); }
       });
   }
 
@@ -332,10 +368,10 @@
 
   function studentPayload(extra) {
     var s = getStudent();
-    return Object.assign({ classId: s.classId, code: s.code, no: s.no, name: s.name }, extra || {});
+    return Object.assign({ token: s.token }, extra || {});
   }
 
-  function draftKey(taskId) { var s = getStudent(); return 'geulsup_draft_' + s.classId + '_' + s.no + '_' + taskId; }
+  function draftKey(taskId) { var s = getStudent(); return 'geulsup_draft_' + lsGet(KEYS.apiId, '') + '_' + s.classId + '_' + s.no + '_' + taskId; }
 
   function conditionChecks(t, text) {
     var n = countChars(text);
@@ -353,23 +389,44 @@
   }
 
   function viewStudentTask(taskId) {
+    var viewTicket = ++routeVersion;
+    if (editorLifecycle) { editorLifecycle.dispose(false); editorLifecycle = null; }
     var s = getStudent();
     if (!s) { go('/'); return; }
     render(h('div', { class: 'card' }, [h('div', { class: 'loading', text: '과제를 불러오는 중…' })]));
 
     var ready = studentTaskCache[taskId] ? Promise.resolve(studentTaskCache[taskId])
-      : fetchStudentTasks().then(function () { return studentTaskCache[taskId]; });
+      : fetchStudentTasks().then(function () { if (viewTicket !== routeVersion) return; return studentTaskCache[taskId]; });
 
-    ready.then(function (t) {
+    ready.then(function (t) { if (viewTicket !== routeVersion) return;
       if (!t) throw new Error('이 과제는 지금 볼 수 없어요. 선생님께 여쭤보세요.');
-      return api('submission.mine', studentPayload({ taskId: taskId })).then(function (mine) { buildStudentTask(t, mine); });
-    }).catch(function (e) {
-      if (/다시 들어와/.test(e.message)) lsDel(KEYS.student);
+      return api('submission.mine', studentPayload({ taskId: taskId })).then(function (mine) { if (viewTicket !== routeVersion) return; buildStudentTask(t, mine); });
+    }).catch(function (e) { if (viewTicket !== routeVersion) return;
+      if (/다시 들어와/.test(e.message)) ssDel(KEYS.student);
       render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/class', class: 'btn ghost small', text: '← 과제 목록' })]));
     });
   }
 
+  function lineComparison(before, after) {
+    var oldLines = String(before || '').split('\n'), newLines = String(after || '').split('\n');
+    function unmatched(lines, other) {
+      var counts = Object.create(null); other.forEach(function (line) { counts[line] = (counts[line] || 0) + 1; });
+      return lines.filter(function (line) { if (counts[line]) { counts[line]--; return false; } return !!line.trim(); });
+    }
+    return { removed: unmatched(oldLines, newLines), added: unmatched(newLines, oldLines) };
+  }
+  function renderComparison(before, after) {
+    var diff = lineComparison(before, after);
+    return h('div', { class: 'line-comparison' }, [
+      h('p', { class: 'hint', text: '줄 단위 비교예요. 순서만 바뀐 줄은 표시하지 않아요.' }),
+      diff.removed.length || diff.added.length ? null : h('p', { text: '문장 내용의 변화가 없어요.' }),
+      h('div', {}, diff.removed.map(function (x) { return h('p', { class: 'diff-removed', text: '이전: ' + x }); })),
+      h('div', {}, diff.added.map(function (x) { return h('p', { class: 'diff-added', text: '이번: ' + x }); }))
+    ]);
+  }
+
   function buildStudentTask(t, mine) {
+    if (editorLifecycle) { editorLifecycle.dispose(false); editorLifecycle = null; }
     var taskId = t.taskId;
     var header = h('div', { class: 'card' }, [
       h('span', { class: 'badge genre', text: t.genreLabel }),
@@ -432,18 +489,27 @@
     }
 
     // ── 편집기 ──
+    var studentAuth = { token: getStudent().token };
+    var serverId = lsGet(KEYS.apiId, '');
+    var localKey = draftKey(taskId);
     var local = null;
-    try { local = JSON.parse(lsGet(draftKey(taskId), 'null')); } catch (e) { local = null; }
+    try { local = JSON.parse(lsGet(localKey, 'null')); if (!local) local = JSON.parse(lsGet('geulsup_draft_' + getStudent().classId + '_' + getStudent().no + '_' + taskId, 'null')); } catch (e) { local = null; }
     var draft = mine.draft || { title: '', text: '', savedAt: '' };
+    var revision = Number(draft.revision) || 0;
+    var serverDraft = { title: draft.title, text: draft.text };
+    var restored = false, conflictLocal = null;
     var prefilled = false;
     if (!mine.draft && latestSub && mine.nextRound > 1) {
       // 고쳐 쓰기: 이전 글을 그대로 가져와 고치게 함 (입력해야 저장됨)
       draft = { title: latestSub.title || '', text: latestSub.text || '', savedAt: '' };
       prefilled = true;
     }
-    // 서버 저장본보다 이 기기의 임시본이 더 최근이면 그걸 씁니다 (전송 실패 대비)
-    if (local && local.at && (!draft.savedAt || local.at > draft.savedAt) && (local.text !== draft.text || local.title !== draft.title)) {
-      draft = { title: local.title || '', text: local.text || '', savedAt: draft.savedAt };
+    // A draft belongs to one server, student, round and server revision.
+    if (local && (local.text !== draft.text || local.title !== draft.title)) {
+      if (local.round === mine.nextRound && local.revision === revision) {
+        draft = { title: local.title || '', text: local.text || '', savedAt: draft.savedAt };
+        restored = true;
+      } else conflictLocal = local;
     }
 
     var inTitle = h('input', { type: 'text', placeholder: '제목 (안 써도 돼요)', value: draft.title, maxlength: '100', class: 'essay-title' });
@@ -455,7 +521,8 @@
     var btnSave = h('button', { class: 'small secondary', text: '지금 저장' });
     var btnSubmit = h('button', { class: 'big', text: '제출하기 🌳' });
 
-    var dirty = false, saving = false, timer = null, lastSent = prefilled ? { title: null, text: null } : { title: draft.title, text: draft.text };
+    var dirty = false, saving = false, submitting = false, disposed = false, preventLocalWrites = false, localOK = true, savePromise = Promise.resolve(), timer = null;
+    var lastSent = prefilled ? { title: null, text: null } : serverDraft;
 
     function refresh() {
       var text = ta.value;
@@ -465,68 +532,77 @@
       var checks = conditionChecks(t, text);
       checks.forEach(function (c) { condBox.appendChild(h('span', { class: 'cond ' + (c.ok ? 'ok' : ''), text: (c.ok ? '✅ ' : '⬜ ') + c.text })); });
       var allOk = checks.every(function (c) { return c.ok; }) && n > 0;
-      btnSubmit.disabled = !allOk;
+      btnSubmit.disabled = submitting || !allOk;
       btnSubmit.title = allOk ? '' : '조건을 모두 채우면 제출할 수 있어요';
     }
 
     function localSave() {
-      lsSet(draftKey(taskId), JSON.stringify({ title: inTitle.value, text: ta.value, at: nowIso() }));
+      if (preventLocalWrites) return localOK;
+      localOK = lsSet(localKey, JSON.stringify({ title: inTitle.value, text: ta.value, round: mine.nextRound, revision: revision, at: Date.now() }));
+      return localOK;
     }
-    function nowIso() {
-      var d = new Date(); function p(x) { return (x < 10 ? '0' : '') + x; }
-      return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
-    }
-
+    function hasChanges() { return ta.value.trim() !== lastSent.text || inTitle.value.trim() !== lastSent.title; }
     function serverSave(manual) {
-      if (saving) { dirty = true; return Promise.resolve(); }
-      var payload = { title: inTitle.value.trim(), text: ta.value };
-      if (!manual && payload.title === lastSent.title && payload.text === lastSent.text) return Promise.resolve();
-      saving = true; dirty = false;
-      saveState.textContent = '저장 중…';
-      return api('submission.saveDraft', studentPayload({ taskId: taskId, title: payload.title, text: payload.text }))
-        .then(function (d) {
-          lastSent = payload;
-          saveState.textContent = '저장됨 ' + fmtTime(d.savedAt);
-          saveState.className = 'save-state';
-          if (manual) toast('저장했어요.');
-        })
-        .catch(function (e) {
-          saveState.textContent = '저장 실패 — 이 기기에는 남아 있어요';
-          saveState.className = 'save-state bad';
-          if (manual) toast(e.message, true);
-          if (/이미 제출/.test(e.message)) { lsDel(draftKey(taskId)); viewStudentTask(taskId); }
-        })
-        .then(function () { saving = false; if (dirty) { dirty = false; scheduleSave(); } });
+      if (saving) { dirty = true; return savePromise.then(function () { return hasChanges() ? serverSave(manual) : undefined; }); }
+      if (!hasChanges() && !manual) return Promise.resolve();
+      var payload = { token: studentAuth.token, taskId: taskId, round: mine.nextRound, revision: revision, title: inTitle.value.trim(), text: ta.value.trim() };
+      saving = true; dirty = false; saveState.textContent = '서버에 저장 중…';
+      savePromise = api('submission.saveDraft', payload, serverId).then(function (d) {
+        revision = d.revision; lastSent = { title: payload.title, text: payload.text };
+        if (!disposed) localSave();
+        saveState.textContent = hasChanges() ? '새 내용을 저장할 준비 중…' : '서버 저장 완료 · ' + fmtTime(d.savedAt);
+        saveState.className = 'save-state';
+        if (manual) toast('서버에 저장했어요.');
+      }).catch(function (e) {
+        if (!disposed) localSave();
+        saveState.textContent = localOK ? '서버 저장 실패 · 이 기기에만 보관됨' : '저장 실패 · 글을 복사해 보관해 주세요';
+        saveState.className = 'save-state bad';
+        if (manual) toast(e.message, true);
+        throw e;
+      }).finally(function () {
+        saving = false;
+        if (dirty && !disposed && !submitting) { dirty = false; scheduleSave(); }
+      });
+      return savePromise;
     }
-    function scheduleSave() { clearTimeout(timer); timer = setTimeout(function () { serverSave(false); }, 2500); }
-    function onInput() { refresh(); localSave(); scheduleSave(); }
-    ta.addEventListener('input', onInput);
-    inTitle.addEventListener('input', onInput);
-    btnSave.addEventListener('click', function () { clearTimeout(timer); serverSave(true); });
-
+    function scheduleSave() { clearTimeout(timer); timer = setTimeout(function () { if (!disposed && !submitting) serverSave(false).catch(function () {}); }, 2500); }
+    function onInput() {
+      refresh(); localSave();
+      saveState.textContent = localOK ? '이 기기에 저장됨 · 서버 저장 대기' : '기기 저장 불가 · 서버 저장 대기';
+      scheduleSave();
+    }
+    ta.addEventListener('input', onInput); inTitle.addEventListener('input', onInput);
+    btnSave.addEventListener('click', function () { clearTimeout(timer); serverSave(true).catch(function () {}); });
     btnSubmit.addEventListener('click', function () {
-      var text = ta.value;
-      var n = countChars(text);
-      if (!n) return toast('글을 써 주세요.', true);
-      var bad = conditionChecks(t, text).filter(function (c) { return !c.ok; });
-      if (bad.length) return toast('아직 채우지 못한 조건이 있어요: ' + bad.map(function (c) { return c.text; }).join(', '), true);
-      if (!confirm('제출하면 피드백을 받을 때까지 고칠 수 없어요.\n' + n + '자 · 제출할까요?')) return;
-      clearTimeout(timer);
-      setBusy(btnSubmit, true, '제출하는 중…');
-      setBusy(btnSubmit, true, '제출하고 AI가 글을 읽는 중… (30초쯤 걸려요)');
-      api('submission.submit', studentPayload({ taskId: taskId, title: inTitle.value.trim(), text: text }))
-        .then(function (d) {
-          lsDel(draftKey(taskId));
-          if (d.feedback) toast('제출했어요! 피드백이 도착했어요 🌳');
-          else toast('제출했어요. 피드백은 조금 뒤에 다시 받아 보세요. ' + (d.feedbackError || ''), true);
-          viewStudentTask(taskId);
-        })
-        .catch(function (e) { toast(e.message, true); setBusy(btnSubmit, false); refresh(); });
+      if (submitting) return;
+      if (!countChars(ta.value) || conditionChecks(t, ta.value).some(function (c) { return !c.ok; })) return;
+      if (!confirm('글을 제출하고 AI 피드백을 받을까요? 이름은 별도로 보내지 않지만 글 본문은 AI에 전달돼요. 주소나 연락처는 적지 않았는지 확인해 주세요.')) return;
+      submitting = true; clearTimeout(timer);
+      ta.disabled = true; inTitle.disabled = true; btnSave.disabled = true;
+      setBusy(btnSubmit, true, '글을 저장하는 중…');
+      serverSave(false).then(function () {
+        btnSubmit.textContent = '제출하고 피드백을 만드는 중…';
+        return api('submission.submit', { token: studentAuth.token, taskId: taskId, title: inTitle.value.trim(), text: ta.value.trim(), round: mine.nextRound, revision: revision }, serverId);
+      }).then(function (d) {
+        lsDel(localKey);
+        if (!disposed) { toast(d.feedback ? '제출과 피드백이 완료됐어요 🌳' : '글은 제출됐어요. 피드백은 다시 요청할 수 있어요.'); viewStudentTask(taskId); }
+      }).catch(function (e) {
+        if (!disposed) toast(e.message, true);
+      }).finally(function () {
+        submitting = false; ta.disabled = false; inTitle.disabled = false; btnSave.disabled = false;
+        btnSubmit.textContent = '제출하기 🌳'; refresh();
+      });
     });
-
-    // 화면을 떠날 때 마지막 저장 시도
-    window.onbeforeunload = function () { if (ta.value !== lastSent.text || inTitle.value.trim() !== lastSent.title) { localSave(); serverSave(false); } };
-    window.addEventListener('hashchange', function once() { window.removeEventListener('hashchange', once); window.onbeforeunload = null; clearTimeout(timer); if (ta.value !== lastSent.text || inTitle.value.trim() !== lastSent.title) serverSave(false); });
+    function beforeUnload(ev) { if (hasChanges() || submitting) { localSave(); ev.preventDefault(); ev.returnValue = ''; } }
+    window.addEventListener('beforeunload', beforeUnload);
+    editorLifecycle = {
+      dirty: function () { return hasChanges() || submitting; },
+      dispose: function (flush, clearLocal) {
+        preventLocalWrites = !!clearLocal;
+        disposed = true; clearTimeout(timer); window.removeEventListener('beforeunload', beforeUnload);
+        if (flush !== false && !submitting && hasChanges()) { localSave(); serverSave(false).catch(function () {}); }
+      }
+    };
 
     var roundLabel = (mine.nextRound > 1 ? mine.nextRound + '차 · 고쳐 쓰기 ✍️' : '글쓰기') + (mine.maxRounds ? ' (' + mine.maxRounds + '차까지)' : '');
     var editor = h('div', { class: 'card' }, [
@@ -534,9 +610,12 @@
         h('h2', { text: roundLabel, style: 'margin:0' }),
         h('div', { class: 'fit editor-status' }, [counter, saveState])
       ]),
+      restored ? h('p', { class: 'hint', text: '이 기기의 임시 글을 복원했어요. 서버에 다시 저장합니다.' }) : null,
+      conflictLocal ? h('details', { class: 'recovery' }, [h('summary', { text: '다른 버전의 임시 글이 있어요. 펼쳐서 복사할 수 있어요.' }), h('div', { class: 'essay-view', text: conflictLocal.title + '\n' + conflictLocal.text })]) : null,
       prefilled ? h('p', { class: 'hint', text: '이전에 쓴 글을 그대로 가져왔어요. 피드백을 보고 고쳐서 다시 제출해 보세요.' }) : null,
       inTitle,
       ta,
+      latestSub ? h('details', { class: 'draft-compare', ontoggle: function (ev) { var box = ev.currentTarget; if (box.open) { while (box.children.length > 1) box.lastChild.remove(); box.appendChild(renderComparison(latestSub.text, ta.value)); } } }, [h('summary', { text: '이전 글과 달라진 부분 보기' })]) : null,
       condBox,
       h('div', { class: 'actions', style: 'justify-content:space-between' }, [
         btnSave,
@@ -556,8 +635,14 @@
       })));
     }
 
-    render(header, fbCard, editor, prev);
+    var workspace = h('div', { class: 'writing-workspace' + (fbCard ? ' has-feedback' : '') }, [editor, fbCard]);
+    if (fbCard) workspace.prepend(h('div', { class: 'workspace-tabs', role: 'group', 'aria-label': '글쓰기 화면 선택' }, [
+      h('button', { class: 'small', text: '내 글 쓰기', onclick: function () { workspace.classList.remove('show-feedback'); } }),
+      h('button', { class: 'small secondary', text: '피드백 보기', onclick: function () { workspace.classList.add('show-feedback'); } })
+    ]));
+    render(header, workspace, prev);
     refresh();
+    if (restored) { localSave(); scheduleSave(); }
     if (!draft.text) ta.focus();
   }
 
@@ -566,7 +651,7 @@
   // ───────────────────────────────────────────
   function viewTeacher() {
     var apiId = lsGet(KEYS.apiId, '');
-    if (apiId && ssGet(KEYS.teacherPw)) { go('/teacher/classes'); return; }
+    if (apiId && ssGet(KEYS.teacherToken)) { go('/teacher/classes'); return; }
 
     // 1) 서버 연결
     var inUrl = h('input', { type: 'url', placeholder: 'https://script.google.com/macros/s/AKfy…/exec', value: apiId ? apiUrl(apiId) : '' });
@@ -576,10 +661,12 @@
     btnTest.addEventListener('click', function () {
       var id = extractDeployId(inUrl.value);
       if (!id) return toast('웹 앱 URL(…/exec) 형식이 아니에요.', true);
-      lsSet(KEYS.apiId, id);
       setBusy(btnTest, true, '확인 중…');
-      api('ping')
+      api('ping', {}, id)
         .then(function (d) {
+          checkProtocol(d);
+          if (id !== lsGet(KEYS.apiId, '')) { ssDel(KEYS.teacherToken); ssDel(KEYS.student); studentTaskCache = {}; classCache = {}; }
+          lsSet(KEYS.apiId, id);
           connStatus.textContent = '✅ 연결 성공 — ' + d.app + ' 서버 v' + d.version;
           connStatus.className = 'hint ok';
           toast('서버와 연결됐어요!');
@@ -598,14 +685,14 @@
       if (!lsGet(KEYS.apiId, '')) return toast('먼저 서버 URL을 등록하고 연결 테스트를 해 주세요.', true);
       if (!inPw.value) return toast('비밀번호를 입력해 주세요.', true);
       setBusy(btnLogin, true, '확인 중…');
-      ssSet(KEYS.teacherPw, inPw.value);
-      teacherApi('teacher.login')
+      api('ping').then(function (d) { checkProtocol(d); return api('teacher.login', { pw: inPw.value }); })
         .then(function (d) {
+          ssSet(KEYS.teacherToken, d.token); inPw.value = '';
           if (d.genres && d.genres.length) GENRES = d.genres;
           toast((d.teacher.name ? d.teacher.name + ' 선생님, ' : '') + '환영합니다!');
           go('/teacher/classes');
         })
-        .catch(function (e) { ssDel(KEYS.teacherPw); toast(e.message, true); setBusy(btnLogin, false); });
+        .catch(function (e) { ssDel(KEYS.teacherToken); toast(e.message, true); setBusy(btnLogin, false); });
     }
     btnLogin.addEventListener('click', login);
     inPw.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') login(); });
@@ -633,17 +720,19 @@
       h('h2', { text: '2. 교사 로그인' }),
       h('label', { text: '교사 비밀번호' }), inPw,
       btnLogin,
-      h('p', { class: 'hint', text: '비밀번호는 이 브라우저를 닫으면 지워져요. 학생이 쓰는 기기에서는 로그인하지 마세요.' })
+      h('p', { class: 'hint', text: '로그인은 최대 6시간 유지돼요. 사용을 마치면 로그아웃해 주세요. 학생이 쓰는 기기에서는 로그인하지 마세요.' })
     ]);
 
-    render(guide, connect, loginCard);
+    var help = h('details', { class: 'setup-guide' }, [h('summary', { text: '처음 연결하시나요? 설정 안내 보기' }), guide, connect]);
+    if (!apiId) help.open = true;
+    render(loginCard, help);
   }
 
   // ───────────────────────────────────────────
   // 교사: 학급 목록
   // ───────────────────────────────────────────
   function viewClasses() {
-    if (!ssGet(KEYS.teacherPw)) { go('/teacher'); return; }
+    if (!ssGet(KEYS.teacherToken)) { go('/teacher'); return; }
 
     var list = h('div', { class: 'class-list' }, [h('div', { class: 'loading', text: '학급을 불러오는 중…' })]);
     var statusBox = h('ul', { class: 'status-list' });
@@ -660,7 +749,7 @@
       h('h2', { text: '서버 상태' }),
       statusBox,
       h('div', { class: 'actions' }, [
-        h('button', { class: 'ghost small', text: '서버 설정 바꾸기', onclick: function () { ssDel(KEYS.teacherPw); go('/teacher'); } })
+        h('button', { class: 'ghost small', text: '서버 설정 바꾸기', onclick: function () { ssDel(KEYS.teacherToken); go('/teacher'); } })
       ])
     ]);
 
@@ -749,7 +838,7 @@
   }
 
   function viewClassForm(existing) {
-    if (!ssGet(KEYS.teacherPw)) { go('/teacher'); return; }
+    if (!ssGet(KEYS.teacherToken)) { go('/teacher'); return; }
 
     var inName = h('input', { type: 'text', placeholder: '예: 4학년 2반', value: existing ? existing.name : '' });
     var sel = h('select', {}, [1, 2, 3, 4, 5, 6].map(function (g) {
@@ -814,13 +903,37 @@
     return Promise.resolve();
   }
 
+  function buildStudentCodes(classId) {
+    var box = h('div', { class: 'private-codes' });
+    var list = h('div');
+    var button = h('button', { class: 'secondary small', text: '개인 입장 코드 발급·확인', onclick: function () {
+      setBusy(button, true);
+      teacherApi('student.codes', { classId: classId }).then(function (d) {
+        clear(list);
+        list.appendChild(h('p', { class: 'hint', text: '전체 목록은 학생들에게 보여 주지 마세요. 각 학생에게 자신의 코드만 전달하세요.' }));
+        d.students.forEach(function (st) {
+          var code = h('code', { text: st.pin });
+          list.appendChild(h('div', { class: 'code-row' }, [h('span', { text: st.no + '번 ' + st.name }), code,
+            h('button', { class: 'small ghost', text: '복사', onclick: function () { copyText(st.pin); } }),
+            h('button', { class: 'small ghost', text: '재발급', onclick: function (e) {
+              if (!confirm(st.name + ' 학생의 코드를 바꿀까요? 기존 로그인도 만료됩니다.')) return;
+              var btn = e.currentTarget; setBusy(btn, true);
+              teacherApi('student.codes', { classId: classId, resetNo: st.no }).then(function (r) { var item = r.students.filter(function (x) { return x.no === st.no; })[0]; st.pin = item.pin; code.textContent = item.pin; }).catch(function (err) { toast(err.message, true); }).finally(function () { setBusy(btn, false); });
+            } })]));
+        });
+      }).catch(function (e) { toast(e.message, true); }).finally(function () { setBusy(button, false); });
+    } });
+    box.append(button, list); return box;
+  }
+
   function viewClassDetail(classId) {
-    if (!ssGet(KEYS.teacherPw)) { go('/teacher'); return; }
+    var viewTicket = ++routeVersion;
+    if (!ssGet(KEYS.teacherToken)) { go('/teacher'); return; }
     var holder = h('div', {}, [h('div', { class: 'loading', text: '학급 정보를 불러오는 중…' })]);
     render(holder);
 
     Promise.all([teacherApi('class.list'), teacherApi('student.list', { classId: classId })])
-      .then(function (res) {
+      .then(function (res) { if (viewTicket !== routeVersion) return;
         var cls = res[0].classes.filter(function (c) { return c.classId === classId; })[0];
         var students = res[1].students;
         if (!cls) throw new Error('학급을 찾을 수 없어요.');
@@ -837,7 +950,7 @@
             h('button', { class: 'small secondary', text: 'QR 보기/숨기기', onclick: function () { qrBox.style.display = qrBox.style.display === 'none' ? 'flex' : 'none'; } })
           ]),
           qrBox,
-          h('p', { class: 'hint', text: '링크로 들어오면 서버 연결과 학급 코드가 자동으로 채워져요. 학생은 번호와 이름만 적으면 돼요.' })
+          h('p', { class: 'hint', text: '링크로 들어오면 서버 연결과 학급 코드가 자동으로 채워져요. 학생은 번호·이름·개인 입장 코드를 입력해요. 아래에서 개인 코드를 확인해 한 명씩 전달해 주세요.' })
         ]);
         try {
           /* global QRCode */
@@ -861,6 +974,7 @@
           share,
           h('h3', { text: '학생 명단' }),
           rosterList,
+          buildStudentCodes(classId),
           h('div', { class: 'actions' }, [
             h('a', { href: '#/teacher/classes', class: 'btn ghost small', text: '← 학급 목록' }),
             h('a', { href: '#/teacher/class/' + cls.classId + '/tasks', class: 'btn small', text: '✏️ 과제 관리' }),
@@ -869,14 +983,14 @@
               var b = ev.currentTarget;
               setBusy(b, true);
               teacherApi('class.setStatus', { classId: cls.classId, status: archived ? '활성' : '보관' })
-                .then(function () { toast(archived ? '학급을 다시 열었어요.' : '학급을 보관했어요. 학생은 들어올 수 없어요.'); viewClassDetail(classId); })
-                .catch(function (e) { toast(e.message, true); setBusy(b, false); });
+                .then(function () { if (viewTicket !== routeVersion) return; toast(archived ? '학급을 다시 열었어요.' : '학급을 보관했어요. 학생은 들어올 수 없어요.'); viewClassDetail(classId); })
+                .catch(function (e) { if (viewTicket !== routeVersion) return; toast(e.message, true); setBusy(b, false); });
             } })
           ])
         ]);
         render(card);
       })
-      .catch(function (e) { render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/teacher/classes', class: 'btn ghost small', text: '← 학급 목록' })])); });
+      .catch(function (e) { if (viewTicket !== routeVersion) return; render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/teacher/classes', class: 'btn ghost small', text: '← 학급 목록' })])); });
   }
 
   // ───────────────────────────────────────────
@@ -894,7 +1008,7 @@
   }
 
   function viewTasks(classId) {
-    if (!ssGet(KEYS.teacherPw)) { go('/teacher'); return; }
+    if (!ssGet(KEYS.teacherToken)) { go('/teacher'); return; }
     var list = h('div', { class: 'task-list' }, [h('div', { class: 'loading', text: '과제를 불러오는 중…' })]);
     var title = h('h2', { text: '과제' });
     var desc = h('p', { class: 'desc', text: '' });
@@ -949,14 +1063,15 @@
   // 교사: 과제 만들기 / 수정
   // ───────────────────────────────────────────
   function viewTaskForm(classId, taskId) {
-    if (!ssGet(KEYS.teacherPw)) { go('/teacher'); return; }
+    var viewTicket = ++routeVersion;
+    if (!ssGet(KEYS.teacherToken)) { go('/teacher'); return; }
     render(h('div', { class: 'card' }, [h('div', { class: 'loading', text: '불러오는 중…' })]));
 
     var loads = [getClass(classId)];
     if (taskId) loads.push(teacherApi('task.get', { taskId: taskId }));
-    Promise.all(loads).then(function (res) {
+    Promise.all(loads).then(function (res) { if (viewTicket !== routeVersion) return;
       buildTaskForm(res[0], res[1] ? res[1].task : null);
-    }).catch(function (e) {
+    }).catch(function (e) { if (viewTicket !== routeVersion) return;
       render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/teacher/class/' + classId + '/tasks', class: 'btn ghost small', text: '← 과제 목록' })]));
     });
   }
@@ -1166,7 +1281,25 @@
       h('div', { class: 'actions' }, [h('a', { href: '#/teacher/class/' + classId + '/tasks', class: 'btn ghost small', text: '← 과제 목록' })])
     ]);
 
-    render(card, critCard);
+    var preview = h('div', { class: 'card' });
+    var sections = [card, critCard, preview];
+    var labels = ['1. 글감·조건', '2. 평가 기준', '3. 미리보기·저장'];
+    var tabs = h('nav', { class: 'wizard-tabs', 'aria-label': '과제 만들기 단계' });
+    var currentStep = 0;
+    function showStep(step) {
+      currentStep = step;
+      sections.forEach(function (part, i) { part.hidden = i !== step; });
+      [].forEach.call(tabs.children, function (b, i) { b.className = i === step ? '' : 'secondary'; b.setAttribute('aria-current', i === step ? 'step' : 'false'); });
+      if (step === 2) {
+        clear(preview);
+        preview.append(h('h2', { text: '학생에게 이렇게 보여요' }), h('h3', { text: inTitle.value || '(과제 제목)' }), h('div', { class: 'prompt-box', text: inPrompt.value || '(글감·안내)' }), h('p', { text: '평가 기준: ' + state.criteria.map(function (c) { return c.name; }).join(' · ') }), h('p', { class: 'hint', text: '최소 ' + (inMin.value || '제한 없음') + ' / 최대 ' + (inMax.value || '제한 없음') + '자 · 필수 낱말: ' + (inWords.value || '없음') }), btnSave);
+      }
+    }
+    labels.forEach(function (label, i) { tabs.appendChild(h('button', { text: label, onclick: function () { showStep(i); } })); });
+    var moves = h('div', { class: 'actions' }, [h('button', { class: 'ghost', text: '이전 단계', onclick: function () { showStep(Math.max(0, currentStep - 1)); } }), h('button', { text: '다음 단계', onclick: function () { showStep(Math.min(2, currentStep + 1)); } })]);
+    btnSave.remove();
+    render(tabs, card, critCard, preview, moves);
+    showStep(0);
     renderCriteria();
     if (!existing) inTitle.focus();
   }
@@ -1180,12 +1313,14 @@
   }
 
   function viewSubmissions(classId, taskId) {
-    if (!ssGet(KEYS.teacherPw)) { go('/teacher'); return; }
+    var viewTicket = ++routeVersion;
+    if (!ssGet(KEYS.teacherToken)) { go('/teacher'); return; }
     render(h('div', { class: 'card' }, [h('div', { class: 'loading', text: '제출 현황을 불러오는 중…' })]));
     teacherApi('submission.list', { taskId: taskId })
-      .then(function (d) {
+      .then(function (d) { if (viewTicket !== routeVersion) return;
         var c = d.counts;
         var criteria = d.task.criteria || [];
+        submissionNavigation = d.rows.filter(function (r) { return r.submissionId; }).map(function (r) { return { id: r.submissionId, name: r.no + '번 ' + r.name }; });
         var graded = d.rows.filter(function (r) { return r.feedback; });
 
         var summary = h('div', { class: 'count-row' }, [
@@ -1249,6 +1384,7 @@
             h('td', {}, [levelsCell]),
             h('td', { class: 'act' }, [btnMore, canOpen ? h('a', { href: '#/teacher/submission/' + r.submissionId, class: 'btn small secondary', text: '보기' }) : null])
           ]);
+          tr.dataset.state = r.state; tr.dataset.name = r.name; tr.dataset.note = fb && fb.hasTeacherNote ? 'yes' : 'no';
           tbody.appendChild(tr);
           if (fb) {
             var detail = h('tr', { class: 'fb-row', style: 'display:none' }, [
@@ -1263,6 +1399,7 @@
                 ])
               ])
             ]);
+            tr._detail = detail;
             tbody.appendChild(detail);
             btnMore.addEventListener('click', function () {
               var open = detail.style.display !== 'none';
@@ -1283,6 +1420,15 @@
           btnAll.textContent = anyClosed ? '피드백 모두 접기' : '피드백 모두 펼치기';
         } });
 
+        var search = h('input', { type: 'text', placeholder: '학생 이름 검색', 'aria-label': '학생 이름 검색' });
+        var filter = h('select', { 'aria-label': '제출 상태 필터' }, ['전체', '미작성', '작성 중', '제출됨', '피드백완료', '교사 한마디 없음'].map(function (x) { return h('option', { value: x, text: x === '제출됨' ? '피드백 대기' : x }); }));
+        function applyFilter() {
+          [].forEach.call(tbody.querySelectorAll('tr[data-state]'), function (row) {
+            var visible = row.dataset.name.indexOf(search.value.trim()) >= 0 && (filter.value === '전체' || (filter.value === '교사 한마디 없음' ? row.dataset.note === 'no' : row.dataset.state === filter.value));
+            row.hidden = !visible; if (row._detail) row._detail.hidden = !visible;
+          });
+        }
+        search.addEventListener('input', applyFilter); filter.addEventListener('change', applyFilter);
         var card = h('div', { class: 'card' }, [
           h('span', { class: 'badge genre', text: d.task.genreLabel }),
           h('span', { class: 'badge' + (d.task.status === '열림' ? '' : ' off'), text: d.task.status, style: 'margin-left:6px' }),
@@ -1292,6 +1438,7 @@
             h('span', { class: 'muted', text: '단계: ' + LEVELS.slice(1).map(function (L) { return L.emoji + L.n; }).join(' ') + '  (* 선생님이 바꾼 단계)' }),
             graded.length ? h('div', { class: 'fit' }, [btnAll]) : null
           ]),
+          h('div', { class: 'review-filters' }, [search, filter]),
           h('div', { class: 'table-wrap' }, [table]),
           h('div', { class: 'actions' }, [
             h('a', { href: '#/teacher/class/' + classId + '/tasks', class: 'btn ghost small', text: '← 과제 목록' }),
@@ -1300,17 +1447,19 @@
         ]);
         render(card, overview);
       })
-      .catch(function (e) { render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/teacher/class/' + classId + '/tasks', class: 'btn ghost small', text: '← 과제 목록' })])); });
+      .catch(function (e) { if (viewTicket !== routeVersion) return; render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/teacher/class/' + classId + '/tasks', class: 'btn ghost small', text: '← 과제 목록' })])); });
   }
 
   // ───────────────────────────────────────────
   // 교사: 제출글 보기
   // ───────────────────────────────────────────
   function viewSubmissionDetail(submissionId) {
-    if (!ssGet(KEYS.teacherPw)) { go('/teacher'); return; }
+    var viewTicket = ++routeVersion;
+    if (teacherNoteCleanup) { teacherNoteCleanup(); teacherNoteCleanup = null; }
+    if (!ssGet(KEYS.teacherToken)) { go('/teacher'); return; }
     render(h('div', { class: 'card' }, [h('div', { class: 'loading', text: '글을 불러오는 중…' })]));
     teacherApi('submission.get', { submissionId: submissionId })
-      .then(function (d) {
+      .then(function (d) { if (viewTicket !== routeVersion) return;
         var sub = d.submission;
         var task = d.task;
         var backHref = task ? '#/teacher/class/' + task.classId + '/tasks/' + task.taskId + '/submissions' : '#/teacher/classes';
@@ -1320,8 +1469,8 @@
             if (!confirm(sub.name + ' 학생의 ' + sub.round + '차 제출을 되돌릴까요? 학생이 다시 고쳐서 제출할 수 있게 돼요.')) return;
             var b = ev.currentTarget; setBusy(b, true);
             teacherApi('submission.reopen', { submissionId: submissionId })
-              .then(function () { toast('되돌렸어요. 학생 화면에서 다시 고칠 수 있어요.'); viewSubmissionDetail(submissionId); })
-              .catch(function (e) { toast(e.message, true); setBusy(b, false); });
+              .then(function () { if (viewTicket !== routeVersion) return; toast('되돌렸어요. 학생 화면에서 다시 고칠 수 있어요.'); viewSubmissionDetail(submissionId); })
+              .catch(function (e) { if (viewTicket !== routeVersion) return; toast(e.message, true); setBusy(b, false); });
           } }));
         }
         var card = h('div', { class: 'card' }, [
@@ -1347,8 +1496,8 @@
             if (sub.feedback && !confirm('AI 피드백을 다시 만들까요? 기존 AI 결과는 덮어써요. (교사 한마디·최종 단계는 유지)')) return;
             var b = ev.currentTarget; setBusy(b, true, 'AI가 읽는 중…');
             teacherApi('feedback.regenerate', { submissionId: submissionId })
-              .then(function () { toast('AI 피드백을 만들었어요.'); viewSubmissionDetail(submissionId); })
-              .catch(function (e) { toast(e.message, true); setBusy(b, false); });
+              .then(function () { if (viewTicket !== routeVersion) return; toast('AI 피드백을 만들었어요.'); viewSubmissionDetail(submissionId); })
+              .catch(function (e) { if (viewTicket !== routeVersion) return; toast(e.message, true); setBusy(b, false); });
           } });
           fbCard = sub.feedback
             ? renderFeedback(sub.feedback, sub, { forStudent: false, extraActions: [btnRegen] })
@@ -1358,6 +1507,8 @@
               ]);
         }
         var prev = null;
+        var priorRound = d.rounds.filter(function (r) { return r.round < sub.round; }).sort(function (a,b) { return b.round-a.round; })[0];
+        if (priorRound) card.appendChild(h('details', {}, [h('summary', { text: '이전 글과 달라진 부분' }), renderComparison(priorRound.text, sub.text)]));
         var others = d.rounds.filter(function (r) { return r.submissionId !== submissionId; });
         if (others.length) {
           prev = h('div', { class: 'card' }, [h('h3', { text: '다른 차수', style: 'margin-top:0' })].concat(others.map(function (r) {
@@ -1367,9 +1518,10 @@
             ]);
           })));
         }
-        render(card, fbCard, teacherCard, prev);
+        var nav = h('nav', { class: 'student-review-nav', 'aria-label': '학생 글 이동' }, submissionNavigation.map(function (item) { return h('a', { href: '#/teacher/submission/' + item.id, class: 'btn small ' + (item.id === submissionId ? '' : 'ghost'), text: item.name, 'aria-current': item.id === submissionId ? 'page' : null }); }));
+        render(nav, h('div', { class: 'review-workspace' }, [h('div', {}, [card, prev]), h('div', {}, [teacherCard, fbCard])]));
       })
-      .catch(function (e) { render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/teacher/classes', class: 'btn ghost small', text: '← 학급 목록' })])); });
+      .catch(function (e) { if (viewTicket !== routeVersion) return; render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/teacher/classes', class: 'btn ghost small', text: '← 학급 목록' })])); });
   }
 
   // 교사 한마디 · 기준별 최종 단계 편집 카드
@@ -1390,13 +1542,22 @@
       ]);
     });
     var btn = h('button', { class: 'big', text: '선생님 한마디 · 단계 저장' });
+    var initialNote = note.value;
+    var initialLevels = JSON.stringify(Object.keys(selects).map(function (id) { return selects[id].value; }));
+    function teacherDirty() { return initialNote !== note.value || initialLevels !== JSON.stringify(Object.keys(selects).map(function (id) { return selects[id].value; })); }
+    function warnNote(ev) { if (teacherDirty()) { ev.preventDefault(); ev.returnValue = ''; } }
+    window.addEventListener('beforeunload', warnNote);
+    var guard = function (ev) { var link = ev.target.closest('a[href]'); if (link && teacherDirty() && !confirm('선생님 한마디·단계를 아직 저장하지 않았어요. 이동할까요?')) { ev.preventDefault(); ev.stopPropagation(); } };
+    $app.addEventListener('click', guard, true);
+    teacherNoteCleanup = function () { window.removeEventListener('beforeunload', warnNote); $app.removeEventListener('click', guard, true); };
     btn.addEventListener('click', function () {
       var finalLevels = {};
       Object.keys(selects).forEach(function (id) { var v = parseInt(selects[id].value, 10); if (v) finalLevels[id] = v; });
       setBusy(btn, true, '저장 중…');
+      note.disabled = true; Object.keys(selects).forEach(function (id) { selects[id].disabled = true; });
       teacherApi('feedback.teacher', { submissionId: submissionId, teacherNote: note.value.trim(), finalLevels: finalLevels })
-        .then(function () { toast('저장했어요. 학생 화면에 바로 반영돼요.'); viewSubmissionDetail(submissionId); })
-        .catch(function (e) { toast(e.message, true); setBusy(btn, false); });
+        .then(function () { initialNote = note.value; initialLevels = JSON.stringify(Object.keys(selects).map(function (id) { return selects[id].value; })); toast('저장했어요. 학생 화면에 반영돼요.'); setBusy(btn, false); })
+        .catch(function (e) { toast(e.message, true); setBusy(btn, false); }).finally(function () { note.disabled = false; Object.keys(selects).forEach(function (id) { selects[id].disabled = false; }); });
     });
     return h('div', { class: 'card teacher-edit' }, [
       h('h2', { text: '👩‍🏫 선생님 한마디 · 최종 단계' }),
@@ -1491,7 +1652,7 @@
           return h('div', { class: 'growth-row' }, [
             h('span', { class: 'growth-name', text: g.name }),
             h('span', { class: 'growth-steps' }, [lv(g.before).emoji + ' ' + (g.before || '?') + ' → ' + lv(g.after).emoji + ' ' + (g.after || '?')]),
-            h('span', { class: 'growth-delta ' + (up ? 'up' : down ? 'down' : ''), text: up ? '▲ 올라갔어요' : down ? '▼ 내려갔어요' : '그대로' }),
+            h('span', { class: 'growth-delta ' + (up ? 'up' : down ? 'down' : ''), text: up ? '새롭게 자란 부분' : down ? '다시 살펴볼 부분' : '유지한 부분' }),
             g.comment ? h('div', { class: 'growth-comment', text: g.comment }) : null
           ]);
         }))
@@ -1503,21 +1664,19 @@
     var head = h('div', { class: 'fb-head' }, [
       h('div', {}, [
         h('div', { class: 'muted', text: who + sub.round + '차 피드백 · ' + fmtTime(fb.createdAt) + (forStudent ? '' : ' · ' + (fb.model || '')) }),
-        h('h2', { text: forStudent ? '🤖 AI 선생님의 피드백' : 'AI 피드백', style: 'margin:4px 0 0' })
+        h('h2', { text: forStudent ? '🌱 AI 글쓰기 도우미' : 'AI 피드백', style: 'margin:4px 0 0' })
       ]),
       opts.extraActions ? h('div', { class: 'fit actions', style: 'margin:0' }, opts.extraActions) : null
     ]);
 
+    var feedbackDetails = h('details', { class: 'feedback-details' }, [h('summary', { text: '기준별 근거와 자세한 피드백 보기' }), grid, details, growth, list('👍 잘한 점', fb.strengths, 'fb-good'), list('🔧 고쳐 볼 점', fb.improvements, 'fb-fix'), corrections]);
+    if (!forStudent) feedbackDetails.open = true;
     return h('div', { class: 'card fb-card' }, [
       head,
       fb.summary ? h('div', { class: 'fb-summary', text: fb.summary }) : null,
-      grid,
-      details,
-      growth,
-      list('👍 잘한 점', fb.strengths, 'fb-good'),
-      list('🔧 고쳐 볼 점', fb.improvements, 'fb-fix'),
+      forStudent && fb.strengths && fb.strengths.length ? list('잘한 점', [fb.strengths[0]], 'fb-good') : null,
       fb.nextTry ? h('div', { class: 'fb-block fb-next' }, [h('h3', { text: '🎯 다음에 꼭 해 볼 한 가지' }), h('p', { text: fb.nextTry })]) : null,
-      corrections,
+      feedbackDetails,
       teacherNote
     ]);
   }
@@ -1525,6 +1684,7 @@
   // ───────────────────────────────────────────
   // 시작
   // ───────────────────────────────────────────
+  lsDel('geulsup_student'); ssDel('geulsup_teacher_pw');
   readLinkParams();
   window.addEventListener('hashchange', route);
   route();
