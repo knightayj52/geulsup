@@ -2,6 +2,7 @@
  * 글숲 (geulsup) — 학생 글쓰기 AI 피드백 앱 · 화면 로직
  * © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
  *
+ * v0.4.1 — 과제 설정(고칠 곳 표시 개수 · 최대 차수), 차수 종료 화면
  * v0.4.0 — 4단계: AI 피드백
  *   - 학생: 제출 즉시 기준별 성장 단계(씨앗·새싹·나무·열매)·근거·조언, 잘한 점/고쳐 볼 점/다음에 시도, 고칠 곳 → 고쳐 쓰기(다음 차수)
  *   - 교사: 제출글 화면에 AI 결과 표시, 다시 채점, AI 연결 테스트
@@ -22,7 +23,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '0.4.0';
+  var APP_VERSION = '0.4.1';
 
   // 서버와 같은 목록 (ping/login 응답으로 덮어씀)
   var GENRES = [
@@ -405,6 +406,28 @@
     var latestSub = mine.submitted.length ? mine.submitted[mine.submitted.length - 1] : null;
     var fbCard = latestSub && latestSub.feedback ? renderFeedback(latestSub.feedback, latestSub, { forStudent: true }) : null;
 
+    // ── 차수 제한에 도달: 더 쓸 수 없음 ──
+    if (mine.finished) {
+      var fin = h('div', { class: 'card' }, [
+        h('div', { class: 'submitted-banner' }, [
+          h('span', { class: 'big-emoji', text: '🏁' }),
+          h('div', {}, [
+            h('div', { style: 'font-weight:700;font-size:17px', text: mine.maxRounds + '차까지 모두 마쳤어요! 수고했어요.' }),
+            h('div', { class: 'muted', text: '이 과제는 ' + mine.maxRounds + '차까지 쓸 수 있어요. 아래에서 지금까지 쓴 글과 피드백을 다시 볼 수 있어요.' })
+          ])
+        ]),
+        h('div', { class: 'actions' }, [h('a', { href: '#/class', class: 'btn ghost small', text: '← 과제 목록' })])
+      ]);
+      var hist = h('div', { class: 'card' }, [h('h3', { text: '내가 쓴 글', style: 'margin-top:0' })].concat(mine.submitted.map(function (sv) {
+        return h('details', { class: 'prev-round' }, [
+          h('summary', { text: sv.round + '차 · ' + fmtTime(sv.submittedAt) + ' · ' + sv.charCount + '자' + (sv.feedback ? ' · ' + levelSummary(sv.feedback) : '') }),
+          h('div', { class: 'essay-view', text: sv.text })
+        ]);
+      })));
+      render(header, fin, fbCard, hist);
+      return;
+    }
+
     // ── 편집기 ──
     var local = null;
     try { local = JSON.parse(lsGet(draftKey(taskId), 'null')); } catch (e) { local = null; }
@@ -502,7 +525,7 @@
     window.onbeforeunload = function () { if (ta.value !== lastSent.text || inTitle.value.trim() !== lastSent.title) { localSave(); serverSave(false); } };
     window.addEventListener('hashchange', function once() { window.removeEventListener('hashchange', once); window.onbeforeunload = null; clearTimeout(timer); if (ta.value !== lastSent.text || inTitle.value.trim() !== lastSent.title) serverSave(false); });
 
-    var roundLabel = mine.nextRound > 1 ? mine.nextRound + '차 · 고쳐 쓰기 ✍️' : '글쓰기';
+    var roundLabel = (mine.nextRound > 1 ? mine.nextRound + '차 · 고쳐 쓰기 ✍️' : '글쓰기') + (mine.maxRounds ? ' (' + mine.maxRounds + '차까지)' : '');
     var editor = h('div', { class: 'card' }, [
       h('div', { class: 'row', style: 'align-items:center' }, [
         h('h2', { text: roundLabel, style: 'margin:0' }),
@@ -900,7 +923,7 @@
               h('span', { class: 'badge genre', text: t.genreLabel }),
               h('span', { class: 'badge' + (closed ? ' off' : ''), text: closed ? '닫힘' : '열림', style: 'margin-left:6px' }),
               h('div', { class: 'task-title', text: t.title }),
-              h('div', { class: 'task-meta', text: bandLabel(t.band) + ' 기준 ' + t.criteria.length + '개 · ' + (taskConditionText(t) || '분량 자유') + ' · ' + String(t.createdAt).slice(0, 10) })
+              h('div', { class: 'task-meta', text: bandLabel(t.band) + ' 기준 ' + t.criteria.length + '개 · ' + (taskConditionText(t) || '분량 자유') + ' · 고칠 곳 ' + (t.maxCorrections ? t.maxCorrections + '개' : '모두') + ' · ' + (t.maxRounds ? t.maxRounds + '차까지' : '차수 제한 없음') + ' · ' + String(t.createdAt).slice(0, 10) })
             ]),
             h('div', { class: 'btns' }, [
               h('a', { href: '#/teacher/class/' + classId + '/tasks/' + t.taskId + '/submissions', class: 'btn small', text: '📄 제출 ' + (t.submittedCount || 0) + (t.draftCount ? ' (+' + t.draftCount + ' 작성 중)' : '') }),
@@ -955,6 +978,24 @@
     var inMin = h('input', { type: 'text', inputmode: 'numeric', placeholder: '예: 300', value: existing && existing.minChars ? String(existing.minChars) : '' });
     var inMax = h('input', { type: 'text', inputmode: 'numeric', placeholder: '예: 800', value: existing && existing.maxChars ? String(existing.maxChars) : '' });
     var inWords = h('input', { type: 'text', placeholder: '예: 까닭, 예를 들어 (쉼표로 구분)', value: existing ? existing.requiredWords.join(', ') : '' });
+    var selCorr = h('select', {}, [
+      h('option', { value: '3', text: '3개까지' }),
+      h('option', { value: '5', text: '5개까지' }),
+      h('option', { value: '7', text: '7개까지 (기본)' }),
+      h('option', { value: '10', text: '10개까지' }),
+      h('option', { value: '0', text: '찾은 것 모두' })
+    ]);
+    selCorr.value = existing && existing.maxCorrections !== undefined ? String(existing.maxCorrections) : '7';
+    if (![].slice.call(selCorr.options).some(function (o) { return o.value === selCorr.value; })) selCorr.value = '7';
+    var selRounds = h('select', {}, [
+      h('option', { value: '0', text: '제한 없음 (기본)' }),
+      h('option', { value: '1', text: '1차만 (고쳐 쓰기 없음)' }),
+      h('option', { value: '2', text: '2차까지' }),
+      h('option', { value: '3', text: '3차까지' }),
+      h('option', { value: '5', text: '5차까지' })
+    ]);
+    selRounds.value = existing && existing.maxRounds !== undefined ? String(existing.maxRounds) : '0';
+    if (![].slice.call(selRounds.options).some(function (o) { return o.value === selRounds.value; })) selRounds.value = '0';
 
     // ── 기준 편집기 ──
     var critBox = h('div', { class: 'crit-list' });
@@ -1067,6 +1108,8 @@
         minChars: parseInt(inMin.value, 10) || 0,
         maxChars: parseInt(inMax.value, 10) || 0,
         requiredWords: inWords.value.split(',').map(function (w) { return w.trim(); }).filter(Boolean),
+        maxCorrections: parseInt(selCorr.value, 10),
+        maxRounds: parseInt(selRounds.value, 10),
         criteria: state.criteria.map(function (c) { return { id: c.id, name: c.name.trim(), group: c.group, levels: c.levels.map(function (l) { return l.trim(); }) }; })
       };
       if (!payload.title) return toast('과제 제목을 입력해 주세요.', true);
@@ -1102,7 +1145,13 @@
         h('div', {}, [h('label', { text: '최대 글자 수' }), inMax])
       ]),
       h('label', { text: '꼭 써야 할 낱말 (선택)' }), inWords,
-      h('p', { class: 'hint', text: '글자 수는 공백 포함. 비워 두면 제한 없음.' })
+      h('p', { class: 'hint', text: '글자 수는 공백 포함. 비워 두면 제한 없음.' }),
+      h('h3', { text: 'AI 피드백 설정' }),
+      h('div', { class: 'row' }, [
+        h('div', {}, [h('label', { text: '고칠 곳(맞춤법 등) 보여 줄 개수' }), selCorr]),
+        h('div', {}, [h('label', { text: '고쳐 쓰기 차수' }), selRounds])
+      ]),
+      h('p', { class: 'hint', text: '고칠 곳은 한 번에 너무 많이 보이면 학생이 지치니 7개쯤을 권해요. 나머지는 다음 차수에서 다시 잡혀요. 차수를 제한하면 마지막 차수 피드백을 받은 뒤 더 쓸 수 없어요.' })
     ]);
 
     var critCard = h('div', { class: 'card' }, [
