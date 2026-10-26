@@ -2,6 +2,9 @@
  * 글숲 (geulsup) — 학생 글쓰기 AI 피드백 앱 · 화면 로직
  * © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
  *
+ * v0.5.0 — 5단계: 교사 피드백 한눈에
+ *   - 제출 현황: 학생별 단계 이모지 · 총평/다음에 시도 펼쳐 보기 · 학급 통계(기준별 분포, 평균, 고칠 곳 유형)
+ *   - 제출글 보기: 교사 한마디 · 기준별 최종 단계 조정 (학생 화면에 '선생님 판정'으로 표시)
  * v0.4.1 — 과제 설정(고칠 곳 표시 개수 · 최대 차수), 차수 종료 화면
  * v0.4.0 — 4단계: AI 피드백
  *   - 학생: 제출 즉시 기준별 성장 단계(씨앗·새싹·나무·열매)·근거·조언, 잘한 점/고쳐 볼 점/다음에 시도, 고칠 곳 → 고쳐 쓰기(다음 차수)
@@ -23,7 +26,7 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '0.4.1';
+  var APP_VERSION = '0.5.0';
 
   // 서버와 같은 목록 (ping/login 응답으로 덮어씀)
   var GENRES = [
@@ -1182,41 +1185,120 @@
     teacherApi('submission.list', { taskId: taskId })
       .then(function (d) {
         var c = d.counts;
+        var criteria = d.task.criteria || [];
+        var graded = d.rows.filter(function (r) { return r.feedback; });
+
         var summary = h('div', { class: 'count-row' }, [
           h('div', { class: 'count' }, [h('b', { text: String(c.submitted + c.done) }), h('span', { text: '제출' })]),
+          h('div', { class: 'count' }, [h('b', { text: String(c.done) }), h('span', { text: '피드백 완료' })]),
           h('div', { class: 'count' }, [h('b', { text: String(c.draft) }), h('span', { text: '작성 중' })]),
-          h('div', { class: 'count' }, [h('b', { text: String(c.none) }), h('span', { text: '미작성' })]),
-          h('div', { class: 'count' }, [h('b', { text: String(c.total) }), h('span', { text: '전체' })])
+          h('div', { class: 'count' }, [h('b', { text: String(c.none) }), h('span', { text: '미작성 / ' + c.total }) ])
         ]);
-        var table = h('table', { class: 'sub-table' }, [
-          h('thead', {}, [h('tr', {}, [h('th', { text: '번호' }), h('th', { text: '이름' }), h('th', { text: '상태' }), h('th', { text: '차수' }), h('th', { text: '글자' }), h('th', { text: '시각' }), h('th', { text: '' })])]),
-          h('tbody', {}, d.rows.map(function (r) {
-            var canOpen = !!r.submissionId;
-            var tr = h('tr', { class: (r.state === '미작성' ? 'dim' : '') + (canOpen ? ' has-link' : '') }, [
-              h('td', { text: r.no }),
-              h('td', { text: r.name }),
-              h('td', {}, [stateBadge(r.state)]),
-              h('td', { text: r.round ? r.round + '차' : '-' }),
-              h('td', { text: r.charCount ? r.charCount + '자' : '-' }),
-              h('td', { class: 'muted', text: fmtTime(r.submittedAt || r.savedAt) || '-' }),
-              h('td', { class: 'act' }, [canOpen ? h('a', { href: '#/teacher/submission/' + r.submissionId, class: 'btn small secondary', text: '보기' }) : null])
+
+        // ── 학급 한눈에: 기준별 분포·평균, 낮은 기준, 고칠 곳 유형 ──
+        var overview = null;
+        if (graded.length) {
+          var stats = criteria.map(function (cr) {
+            var dist = [0, 0, 0, 0, 0]; var sum = 0, n = 0;
+            graded.forEach(function (r) {
+              var lvRow = r.feedback.levels.filter(function (l) { return l.id === cr.id; })[0];
+              if (lvRow && lvRow.level >= 1) { dist[lvRow.level]++; sum += lvRow.level; n++; }
+            });
+            return { id: cr.id, name: cr.name, dist: dist, avg: n ? sum / n : 0, n: n };
+          });
+          var weakest = stats.filter(function (x) { return x.n; }).sort(function (a, b) { return a.avg - b.avg; }).slice(0, 2);
+          var kindCount = {};
+          graded.forEach(function (r) { (r.feedback.correctionKinds || []).forEach(function (k) { kindCount[k] = (kindCount[k] || 0) + 1; }); });
+          var kinds = Object.keys(kindCount).sort(function (a, b) { return kindCount[b] - kindCount[a]; });
+
+          var bars = h('div', { class: 'stat-list' }, stats.map(function (st) {
+            var total = st.n || 1;
+            return h('div', { class: 'stat-row' }, [
+              h('div', { class: 'stat-name' }, [st.name, h('span', { class: 'stat-avg', text: st.n ? ' 평균 ' + st.avg.toFixed(1) : ' -' })]),
+              h('div', { class: 'stat-bar' }, [1, 2, 3, 4].map(function (L) {
+                var w = st.dist[L] / total * 100;
+                return w ? h('div', { class: 'stat-seg lv' + L, style: 'width:' + w + '%', title: L + '단계 ' + st.dist[L] + '명', text: st.dist[L] ? lv(L).emoji + st.dist[L] : '' }) : null;
+              }))
             ]);
-            if (canOpen) tr.addEventListener('click', function (ev) { if (ev.target.tagName !== 'A') go('/teacher/submission/' + r.submissionId); });
-            return tr;
-          }))
+          }));
+          overview = h('div', { class: 'card overview-card' }, [
+            h('h2', { text: '학급 한눈에' }),
+            h('p', { class: 'desc', text: '피드백을 받은 ' + graded.length + '명의 최근 차수 기준 · 선생님이 바꾼 단계가 있으면 그것으로 셈' }),
+            bars,
+            h('div', { class: 'overview-notes' }, [
+              weakest.length ? h('p', {}, [h('b', { text: '함께 지도하면 좋을 기준: ' }), weakest.map(function (w) { return w.name + '(' + w.avg.toFixed(1) + ')'; }).join(', ')]) : null,
+              kinds.length ? h('p', {}, [h('b', { text: '자주 나온 고칠 곳: ' }), kinds.map(function (k) { return k + ' ' + kindCount[k] + '건'; }).join(' · ')]) : null
+            ])
+          ]);
+        }
+
+        // ── 학생별 표 (피드백 펼쳐 보기) ──
+        var tbody = h('tbody');
+        d.rows.forEach(function (r) {
+          var canOpen = !!r.submissionId;
+          var fb = r.feedback;
+          var levelsCell = fb ? h('span', { class: 'lv-string', title: fb.levels.map(function (l) { return l.name + ' ' + l.level; }).join(' / ') }, fb.levels.map(function (l) {
+            return h('span', { class: 'lv-chip' + (l.overridden ? ' ov' : ''), text: lv(l.level).emoji });
+          })) : h('span', { class: 'muted', text: '-' });
+          var btnMore = fb ? h('button', { class: 'small ghost', text: '피드백' }) : null;
+          var tr = h('tr', { class: (r.state === '미작성' ? 'dim' : '') }, [
+            h('td', { text: r.no }),
+            h('td', {}, [r.name, fb && fb.hasTeacherNote ? h('span', { class: 'badge done', text: '한마디', style: 'margin-left:6px;font-size:10px' }) : null]),
+            h('td', {}, [stateBadge(r.state), r.finished ? h('span', { class: 'badge off', text: '끝', style: 'margin-left:4px' }) : null]),
+            h('td', { text: r.round ? r.round + '차' : '-' }),
+            h('td', {}, [levelsCell]),
+            h('td', { class: 'act' }, [btnMore, canOpen ? h('a', { href: '#/teacher/submission/' + r.submissionId, class: 'btn small secondary', text: '보기' }) : null])
+          ]);
+          tbody.appendChild(tr);
+          if (fb) {
+            var detail = h('tr', { class: 'fb-row', style: 'display:none' }, [
+              h('td', { colspan: '6' }, [
+                h('div', { class: 'fb-inline' }, [
+                  h('div', { class: 'muted', text: fb.round + '차 피드백 · ' + fmtTime(fb.createdAt) + ' · 고칠 곳 ' + fb.correctionsCount + '개' }),
+                  h('div', { class: 'fb-inline-levels' }, fb.levels.map(function (l) { return h('span', { class: 'badge', text: l.name + ' ' + l.level + (l.overridden ? '*' : '') }); })),
+                  fb.summaryText ? h('p', { class: 'fb-inline-summary', text: fb.summaryText }) : null,
+                  fb.improvements && fb.improvements.length ? h('ul', { class: 'fb-inline-list' }, fb.improvements.map(function (x) { return h('li', { text: x }); })) : null,
+                  fb.nextTry ? h('p', {}, [h('b', { text: '🎯 ' }), fb.nextTry]) : null,
+                  h('a', { href: '#/teacher/submission/' + fb.submissionId, class: 'btn small secondary', text: '전체 피드백 · 한마디 쓰기 →' })
+                ])
+              ])
+            ]);
+            tbody.appendChild(detail);
+            btnMore.addEventListener('click', function () {
+              var open = detail.style.display !== 'none';
+              detail.style.display = open ? 'none' : '';
+              btnMore.textContent = open ? '피드백' : '접기';
+            });
+          }
+        });
+        var table = h('table', { class: 'sub-table' }, [
+          h('thead', {}, [h('tr', {}, [h('th', { text: '번호' }), h('th', { text: '이름' }), h('th', { text: '상태' }), h('th', { text: '차수' }), h('th', { text: '단계' }), h('th', { text: '' })])]),
+          tbody
         ]);
+        var btnAll = h('button', { class: 'small ghost', text: '피드백 모두 펼치기', onclick: function () {
+          var rows = tbody.querySelectorAll('.fb-row');
+          var anyClosed = [].some.call(rows, function (x) { return x.style.display === 'none'; });
+          [].forEach.call(rows, function (x) { x.style.display = anyClosed ? '' : 'none'; });
+          [].forEach.call(tbody.querySelectorAll('button.ghost'), function (b) { if (b !== btnAll) b.textContent = anyClosed ? '접기' : '피드백'; });
+          btnAll.textContent = anyClosed ? '피드백 모두 접기' : '피드백 모두 펼치기';
+        } });
+
         var card = h('div', { class: 'card' }, [
           h('span', { class: 'badge genre', text: d.task.genreLabel }),
           h('span', { class: 'badge' + (d.task.status === '열림' ? '' : ' off'), text: d.task.status, style: 'margin-left:6px' }),
           h('h2', { text: d.task.title, style: 'margin-top:8px' }),
           summary,
+          h('div', { class: 'row', style: 'justify-content:space-between;margin:8px 0' }, [
+            h('span', { class: 'muted', text: '단계: ' + LEVELS.slice(1).map(function (L) { return L.emoji + L.n; }).join(' ') + '  (* 선생님이 바꾼 단계)' }),
+            graded.length ? h('div', { class: 'fit' }, [btnAll]) : null
+          ]),
           h('div', { class: 'table-wrap' }, [table]),
           h('div', { class: 'actions' }, [
             h('a', { href: '#/teacher/class/' + classId + '/tasks', class: 'btn ghost small', text: '← 과제 목록' }),
             h('button', { class: 'small secondary', text: '새로고침', onclick: function () { viewSubmissions(classId, taskId); } })
           ])
         ]);
-        render(card);
+        render(card, overview);
       })
       .catch(function (e) { render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/teacher/class/' + classId + '/tasks', class: 'btn ghost small', text: '← 과제 목록' })])); });
   }
@@ -1256,6 +1338,10 @@
           h('div', { class: 'actions' }, actions)
         ]);
         var fbCard = null;
+        var teacherCard = null;
+        if (sub.status !== '임시저장' && sub.feedback) {
+          teacherCard = buildTeacherEditCard(submissionId, sub.feedback, task ? task.criteria : []);
+        }
         if (sub.status !== '임시저장') {
           var btnRegen = h('button', { class: 'small secondary', text: sub.feedback ? '🔄 다시 채점' : '🤖 AI 채점 실행', onclick: function (ev) {
             if (sub.feedback && !confirm('AI 피드백을 다시 만들까요? 기존 AI 결과는 덮어써요. (교사 한마디·최종 단계는 유지)')) return;
@@ -1281,9 +1367,45 @@
             ]);
           })));
         }
-        render(card, fbCard, prev);
+        render(card, fbCard, teacherCard, prev);
       })
       .catch(function (e) { render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/teacher/classes', class: 'btn ghost small', text: '← 학급 목록' })])); });
+  }
+
+  // 교사 한마디 · 기준별 최종 단계 편집 카드
+  function buildTeacherEditCard(submissionId, fb, criteria) {
+    var note = h('textarea', { placeholder: '학생에게 직접 전하고 싶은 말을 적어 주세요. 학생 화면의 피드백 아래에 "선생님 한마디"로 보여요.', style: 'min-height:90px' });
+    note.value = fb.teacherNote || '';
+    var selects = {};
+    var rows = (fb.criteria || []).map(function (c) {
+      var sel = h('select', {}, [h('option', { value: '0', text: 'AI 판정 그대로 (' + c.level + '단계)' })].concat([1, 2, 3, 4].map(function (L) {
+        return h('option', { value: String(L), text: L + '단계 ' + lv(L).name + (L === c.level ? ' (AI와 같음)' : '') });
+      })));
+      var cur = fb.finalLevels && fb.finalLevels[c.id];
+      sel.value = cur ? String(cur) : '0';
+      selects[c.id] = sel;
+      return h('div', { class: 'final-row' }, [
+        h('span', { class: 'final-name' }, [lv(c.level).emoji + ' ', h('b', { text: c.name })]),
+        sel
+      ]);
+    });
+    var btn = h('button', { class: 'big', text: '선생님 한마디 · 단계 저장' });
+    btn.addEventListener('click', function () {
+      var finalLevels = {};
+      Object.keys(selects).forEach(function (id) { var v = parseInt(selects[id].value, 10); if (v) finalLevels[id] = v; });
+      setBusy(btn, true, '저장 중…');
+      teacherApi('feedback.teacher', { submissionId: submissionId, teacherNote: note.value.trim(), finalLevels: finalLevels })
+        .then(function () { toast('저장했어요. 학생 화면에 바로 반영돼요.'); viewSubmissionDetail(submissionId); })
+        .catch(function (e) { toast(e.message, true); setBusy(btn, false); });
+    });
+    return h('div', { class: 'card teacher-edit' }, [
+      h('h2', { text: '👩‍🏫 선생님 한마디 · 최종 단계' }),
+      h('p', { class: 'desc', text: 'AI 판정이 교사 판단과 다르면 여기서 바꿔 주세요. 바꾼 단계는 학생에게 "선생님 판정"으로 표시되고, 학급 통계에도 그 값이 쓰여요. AI를 다시 채점해도 여기 쓴 내용은 유지돼요.' }),
+      h('label', { text: '선생님 한마디' }), note,
+      h('label', { text: '기준별 최종 단계' }),
+      h('div', { class: 'final-list' }, rows),
+      btn
+    ]);
   }
 
   // ───────────────────────────────────────────
