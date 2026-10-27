@@ -2,6 +2,7 @@
  * 글숲 (geulsup) — 학생 글쓰기 AI 피드백 앱 · 서버 (Google Apps Script)
  * © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
  *
+ * v0.6.1 — 학생 입장을 학급 코드 + 번호·이름으로 되돌림 (개인 입장 코드 제거, 세션 토큰·저장 버전 관리는 유지)
  * v0.6.0 — 개인 인증 · 저장 버전 관리 · AI 중복/오래된 결과 방지 · 원문 검증
  * v0.5.0 — 5단계: 교사 피드백 한눈에
  *   - 제출 현황에 학생별 최종 단계·총평·다음에 시도·고칠 곳 요약 포함 (학급 통계용)
@@ -28,7 +29,7 @@
  */
 
 var APP_NAME = '글숲';
-var APP_VERSION = '0.6.0';
+var APP_VERSION = '0.6.1';
 var requestCache_ = {};
 
 // ─────────────────────────────────────────────
@@ -414,7 +415,6 @@ function route_(action, body) {
     // 교사 (비밀번호 필요)
     case 'teacher.login':        return teacherLogin_(body);
     case 'auth.logout':          return logout_(body);
-    case 'student.codes':        requireTeacher_(body); return studentCodes_(body);
     case 'teacher.status':       requireTeacher_(body); return ok_(teacherStatus_());
     case 'class.list':           requireTeacher_(body); return ok_({ classes: listClasses_() });
     case 'class.create':         requireTeacher_(body); return classCreate_(body);
@@ -515,31 +515,6 @@ function requireTeacher_(body) {
   var session = session_(body.token, 'teacher');
   if (session.passwordHash !== digest_(getSettings_().password)) throw new Error('비밀번호가 변경됐어요. 다시 로그인해 주세요.');
 }
-function credentialKey_(classId, no) { return 'student-code:' + digest_(classId + ':' + no); }
-function credential_(classId, no) {
-  var raw = PropertiesService.getScriptProperties().getProperty(credentialKey_(classId, no));
-  return raw ? JSON.parse(raw) : null;
-}
-// Codes stay server-side and are returned only to an authenticated teacher.
-function studentCodes_(body) {
-  var cls = findClass_(body.classId);
-  if (!cls) return fail_('학급을 찾을 수 없어요.');
-  var roster = listStudents_(body.classId), lock = LockService.getScriptLock();
-  lock.waitLock(10000);
-  try {
-    var props = PropertiesService.getScriptProperties();
-    var rows = roster.map(function (st) {
-      var c = credential_(body.classId, st.no);
-      if (!c || c.name !== st.name || String(body.resetNo || '') === st.no) {
-        c = { name: st.name, pin: secret_().slice(0, 10).toUpperCase() };
-        props.setProperty(credentialKey_(body.classId, st.no), JSON.stringify(c));
-      }
-      return { no: st.no, name: st.name, pin: c.pin };
-    });
-    return ok_({ students: rows });
-  } finally { releaseLock_(lock); }
-}
-
 function teacherInfo_() {
   var st = getSettings_();
   return { name: st.teacher, school: st.school, model: st.model, hasApiKey: !!st.apiKey };
@@ -663,10 +638,6 @@ function studentSet_(body) {
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
-    var previous = listStudents_(classId);
-    previous.forEach(function (old) {
-      if (!students.some(function (next) { return next.no === old.no && next.name === old.name; })) PropertiesService.getScriptProperties().deleteProperty(credentialKey_(classId, old.no));
-    });
     delete requestCache_[SHEETS.students];
     var sh = sheet_(SHEETS.students);
     var last = sh.getLastRow();
@@ -705,12 +676,8 @@ function studentJoin_(body) {
         && String(s['이름']).replace(/\s+/g, '') === name) found = s;
   });
   if (!found) return fail_('명단에 없는 번호·이름이에요. 번호와 이름을 다시 확인해 주세요.');
-  var credential = credential_(String(cls['학급ID']), no);
-  var valid = !!credential && credential.name === String(found['이름']) && String(body.pin || '').trim().toUpperCase() === credential.pin;
-  loginAttempt_(String(cls['학급ID']) + ':' + no, valid);
-  if (!valid) return fail_('개인 입장 코드가 맞지 않아요. 선생님께 확인해 주세요.');
-  var token = issueToken_({ role: 'student', classId: String(cls['학급ID']), no: no, name: String(found['이름']), credentialHash: digest_(credential.pin) });
-
+  // 학급 코드 + 명단(번호·이름)으로 입장. 세션 토큰은 학급 코드가 바뀌면 무효가 됨
+  var token = issueToken_({ role: 'student', classId: String(cls['학급ID']), no: no, name: String(found['이름']), codeHash: digest_(code) });
 
   return ok_({
     classId: String(cls['학급ID']),
@@ -998,10 +965,10 @@ function cleanText_(text) {
 // 학생 신원 확인: 학급ID+코드가 맞고 명단에 있어야 함. 성공 시 {cls, no, name} 반환, 실패 시 {error}
 function verifyStudent_(body) {
   var auth = session_(body.token, 'student');
-  var cls = findClass_(auth.classId), c = credential_(auth.classId, auth.no);
+  var cls = findClass_(auth.classId);
   if (!cls || (cls['상태'] || '활성') !== '활성') return { error: '지금은 닫혀 있는 학급이에요.' };
   var found = listStudents_(auth.classId).some(function (s) { return s.no === auth.no && s.name === auth.name; });
-  if (!found || !c || c.name !== auth.name || digest_(c.pin) !== auth.credentialHash) return { error: '입장 정보가 변경됐어요. 다시 로그인해 주세요.' };
+  if (!found || digest_(String(cls['학급코드']).toUpperCase()) !== auth.codeHash) return { error: '입장 정보가 변경됐어요. 다시 로그인해 주세요.' };
   return { cls: cls, no: auth.no, name: auth.name };
 }
 

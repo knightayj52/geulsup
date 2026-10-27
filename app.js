@@ -2,6 +2,7 @@
  * 글숲 (geulsup) — 학생 글쓰기 AI 피드백 앱 · 화면 로직
  * © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
  *
+ * v0.6.1 — 학생 입장: 학급 코드 + 번호·이름 (개인 입장 코드 제거) · 피드백은 처음 볼 때 모두 펼쳐 보이고 이후 접기 가능
  * v0.6.0 — 개인 인증 · 저장 버전 관리 · 글쓰기/피드백 작업 공간
  * v0.5.0 — 5단계: 교사 피드백 한눈에
  *   - 제출 현황: 학생별 단계 이모지 · 총평/다음에 시도 펼쳐 보기 · 학급 통계(기준별 분포, 평균, 고칠 곳 유형)
@@ -27,8 +28,8 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '0.6.0'; // server protocol version
-  var UI_VERSION = '0.6.1';
+  var APP_VERSION = '0.6.1'; // server protocol version
+  var UI_VERSION = '0.6.2';
   var editorLifecycle = null;
   var submissionNavigation = [];
   var teacherNoteCleanup = null;
@@ -326,7 +327,6 @@
     var inCode = h('input', { type: 'text', placeholder: '예: ABC234', maxlength: '6', autocapitalize: 'characters', value: pendCode, style: 'letter-spacing:3px;text-transform:uppercase;font-weight:700' });
     var inNo = h('input', { type: 'text', inputmode: 'numeric', placeholder: '예: 12' });
     var inName = h('input', { type: 'text', placeholder: '예: 김글숲', 'aria-label': '이름' });
-    var inPin = h('input', { type: 'password', placeholder: '선생님이 나에게 준 개인 입장 코드', autocomplete: 'off', 'aria-label': '개인 입장 코드' });
     var btn = h('button', { class: 'big', text: '내 글숲으로 들어가기 →' });
 
     function join() {
@@ -337,7 +337,7 @@
       if (!no || !name) return toast('번호와 이름을 입력해 주세요.', true);
       if (!hasApi) return toast('선생님이 보내 준 학급 링크로 들어와야 해요.', true);
       setBusy(btn, true, '확인하는 중…');
-      api('ping').then(function (d) { checkProtocol(d); return api('student.join', { code: code, no: no, name: name, pin: inPin.value.trim() }); })
+      api('ping').then(function (d) { checkProtocol(d); return api('student.join', { code: code, no: no, name: name }); })
         .then(function (d) {
           ssSet(KEYS.student, JSON.stringify({ token: d.token, classId: d.classId, className: d.className, grade: d.grade, no: d.student.no, name: d.student.name, code: code }));
           lsDel(KEYS.pendCode);
@@ -348,7 +348,7 @@
         .then(function () { setBusy(btn, false); });
     }
     btn.addEventListener('click', join);
-    [inCode, inNo, inName, inPin].forEach(function (i) { i.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') join(); }); });
+    [inCode, inNo, inName].forEach(function (i) { i.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') join(); }); });
 
     var hero = studioIntro(false);
 
@@ -360,8 +360,7 @@
         h('div', {}, [h('label', { text: '번호' }), inNo]),
         h('div', {}, [h('label', { text: '이름' }), inName])
       ]),
-      h('label', { text: '개인 입장 코드' }), inPin,
-      h('p', { class: 'hint', text: '내 코드는 친구에게 알려 주지 않아요. 활동이 끝나면 위쪽의 사용 마치기를 눌러 주세요.' }),
+      h('p', { class: 'hint', text: '명단에 있는 번호와 이름이 맞아야 들어갈 수 있어요. 활동이 끝나면 위쪽의 사용 마치기를 눌러 주세요.' }),
       btn,
       !hasApi ? h('p', { class: 'hint center', text: '아직 서버가 연결되지 않았어요. 선생님이 보내 준 학급 링크(QR)로 들어오면 자동으로 연결돼요.' }) : null
     ]);
@@ -715,10 +714,12 @@
       })));
     }
 
-    var workspace = h('div', { class: 'writing-workspace' + (fbCard ? ' has-feedback' : '') }, [editor, fbCard]);
+    // 아직 안 본 새 피드백이 있으면 좁은 화면에서도 피드백 탭을 먼저 보여 줍니다
+    var unseenFb = !!(fbCard && latestSub && latestSub.feedback && !lsGet('geulsup_fb_seen_' + latestSub.submissionId + '_' + (latestSub.feedback.createdAt || ''), ''));
+    var workspace = h('div', { class: 'writing-workspace' + (fbCard ? ' has-feedback' : '') + (unseenFb ? ' show-feedback' : '') }, [editor, fbCard]);
     if (fbCard) workspace.prepend(h('div', { class: 'workspace-tabs', role: 'group', 'aria-label': '글쓰기 화면 선택' }, [
-      h('button', { class: 'small', 'aria-pressed': 'true', text: '내 글 쓰기', onclick: function () { workspace.classList.remove('show-feedback'); this.setAttribute('aria-pressed', 'true'); this.nextElementSibling.setAttribute('aria-pressed', 'false'); } }),
-      h('button', { class: 'small secondary', 'aria-pressed': 'false', text: '피드백 보기', onclick: function () { workspace.classList.add('show-feedback'); this.setAttribute('aria-pressed', 'true'); this.previousElementSibling.setAttribute('aria-pressed', 'false'); } })
+      h('button', { class: 'small', 'aria-pressed': unseenFb ? 'false' : 'true', text: '내 글 쓰기', onclick: function () { workspace.classList.remove('show-feedback'); this.setAttribute('aria-pressed', 'true'); this.nextElementSibling.setAttribute('aria-pressed', 'false'); } }),
+      h('button', { class: 'small secondary', 'aria-pressed': unseenFb ? 'true' : 'false', text: '피드백 보기', onclick: function () { workspace.classList.add('show-feedback'); this.setAttribute('aria-pressed', 'true'); this.previousElementSibling.setAttribute('aria-pressed', 'false'); } })
     ]));
     render(header, workspace, prev);
     refresh();
@@ -988,28 +989,6 @@
     return Promise.resolve();
   }
 
-  function buildStudentCodes(classId) {
-    var box = h('div', { class: 'private-codes' });
-    var list = h('div');
-    var button = h('button', { class: 'secondary small', text: '개인 입장 코드 발급·확인', onclick: function () {
-      setBusy(button, true);
-      teacherApi('student.codes', { classId: classId }).then(function (d) {
-        clear(list);
-        list.appendChild(h('p', { class: 'hint', text: '전체 목록은 학생들에게 보여 주지 마세요. 각 학생에게 자신의 코드만 전달하세요.' }));
-        d.students.forEach(function (st) {
-          var code = h('code', { text: st.pin });
-          list.appendChild(h('div', { class: 'code-row' }, [h('span', { text: st.no + '번 ' + st.name }), code,
-            h('button', { class: 'small ghost', text: '복사', onclick: function () { copyText(st.pin); } }),
-            h('button', { class: 'small ghost', text: '재발급', onclick: function (e) {
-              if (!confirm(st.name + ' 학생의 코드를 바꿀까요? 기존 로그인도 만료됩니다.')) return;
-              var btn = e.currentTarget; setBusy(btn, true);
-              teacherApi('student.codes', { classId: classId, resetNo: st.no }).then(function (r) { var item = r.students.filter(function (x) { return x.no === st.no; })[0]; st.pin = item.pin; code.textContent = item.pin; }).catch(function (err) { toast(err.message, true); }).finally(function () { setBusy(btn, false); });
-            } })]));
-        });
-      }).catch(function (e) { toast(e.message, true); }).finally(function () { setBusy(button, false); });
-    } });
-    box.append(button, list); return box;
-  }
 
   function viewClassDetail(classId) {
     var viewTicket = ++routeVersion;
@@ -1035,7 +1014,7 @@
             h('button', { class: 'small secondary', text: 'QR 보기/숨기기', onclick: function () { qrBox.style.display = qrBox.style.display === 'none' ? 'flex' : 'none'; } })
           ]),
           qrBox,
-          h('p', { class: 'hint', text: '링크로 들어오면 서버 연결과 학급 코드가 자동으로 채워져요. 학생은 번호·이름·개인 입장 코드를 입력해요. 아래에서 개인 코드를 확인해 한 명씩 전달해 주세요.' })
+          h('p', { class: 'hint', text: '링크로 들어오면 서버 연결과 학급 코드가 자동으로 채워져요. 학생은 번호와 이름만 적으면 돼요.' })
         ]);
         try {
           /* global QRCode */
@@ -1059,7 +1038,6 @@
           share,
           h('h3', { text: '학생 명단' }),
           rosterList,
-          buildStudentCodes(classId),
           h('div', { class: 'actions' }, [
             h('a', { href: '#/teacher/classes', class: 'btn ghost small', text: '← 학급 목록' }),
             h('a', { href: '#/teacher/class/' + cls.classId + '/tasks', class: 'btn small', text: '✏️ 과제 관리' }),
@@ -1754,8 +1732,19 @@
       opts.extraActions ? h('div', { class: 'fit actions', style: 'margin:0' }, opts.extraActions) : null
     ]);
 
-    var feedbackDetails = h('details', { class: 'feedback-details' }, [h('summary', { text: '기준별 근거와 자세한 피드백 보기' }), grid, details, growth, list('👍 잘한 점', fb.strengths, 'fb-good'), list('🔧 고쳐 볼 점', fb.improvements, 'fb-fix'), corrections]);
-    if (!forStudent) feedbackDetails.open = true;
+    // 처음 보는 피드백은 전부 펼쳐서 보여 주고(빼먹지 않도록), 한 번 본 뒤부터는 접었다 펼 수 있게 합니다
+    var seenKey = 'geulsup_fb_seen_' + (fb.submissionId || sub.submissionId || '') + '_' + (fb.createdAt || '');
+    var firstView = forStudent && !lsGet(seenKey, '');
+    var feedbackDetails = h('details', { class: 'feedback-details' }, [h('summary', { text: firstView ? '기준별 근거와 자세한 피드백 (다 읽은 뒤 접을 수 있어요)' : '기준별 근거와 자세한 피드백 보기' }), grid, details, growth, list('👍 잘한 점', fb.strengths, 'fb-good'), list('🔧 고쳐 볼 점', fb.improvements, 'fb-fix'), corrections]);
+    if (!forStudent || firstView) feedbackDetails.open = true;
+    if (firstView) {
+      // 기준별 상세도 모두 펼쳐 두고, 학생이 한 번 접거나 화면을 떠나면 '본 것'으로 기록
+      [].forEach.call(details.querySelectorAll('details'), function (d) { d.open = true; });
+      var markSeen = function () { lsSet(seenKey, '1'); };
+      feedbackDetails.addEventListener('toggle', function () { if (!feedbackDetails.open) markSeen(); });
+      window.addEventListener('hashchange', function once() { window.removeEventListener('hashchange', once); markSeen(); });
+      window.addEventListener('pagehide', markSeen);
+    }
     return h('div', { class: 'card fb-card' }, [
       head,
       fb.summary ? h('div', { class: 'fb-summary', text: fb.summary }) : null,

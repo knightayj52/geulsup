@@ -36,17 +36,17 @@ function fixture() {
   sheets['과제'].push(['T1','C1','학교 소개','explain','학교를 소개해요','3-4',0,0,'',JSON.stringify(criteria),'열림','2026-10-27',3,3]);
   const request=(action,body={})=>{c.requestCache_={};return c.route_(action,body)};
   const teacher=request('teacher.login',{pw:'test-password'}).data.token;
-  const codes=request('student.codes',{token:teacher,classId:'C1'}).data.students;
-  const student=request('student.join',{code:'ABC234',no:'1',name:'가상학생',pin:codes[0].pin}).data.token;
+  const codes=[];
+  const student=request('student.join',{code:'ABC234',no:'1',name:'가상학생'}).data.token;
   const raw=()=>({criteria:[{id:'C1',level:3,evidence:'학교에는 나무가 있어요.',reason:'설명했어요.',tip:'예를 들어요.'}],strengths:['좋아요'],improvements:['예시'],nextTry:'예시를 써요',summary:'좋은 글이에요',corrections:[],growth:[]});
   c.callGemini_=raw;
   const base={token:student,taskId:'T1',round:1,revision:0,text:'학교에는 나무가 있어요.',title:'학교'};
   return {c,sheets,cache,props,request,teacher,student,codes,raw,base};
 }
 test('password only cannot access teacher actions; tokens are required',()=>{const f=fixture();assert.throws(()=>f.request('class.list',{pw:'test-password'}),/인증/);assert.equal(f.request('class.list',{token:f.teacher}).ok,true)});
-test('knowing a class code/name/number is not enough to join',()=>{const f=fixture();assert.equal(f.request('student.join',{code:'ABC234',no:'1',name:'가상학생'}).ok,false)});
+test('class code + roster number/name is enough to join; wrong name is not',()=>{const f=fixture();assert.equal(f.request('student.join',{code:'ABC234',no:'1',name:'가상학생'}).ok,true);assert.equal(f.request('student.join',{code:'ABC234',no:'1',name:'엉뚱'}).ok,false);assert.equal(f.request('student.join',{code:'XXXXXX',no:'1',name:'가상학생'}).ok,false)});
 test('token identity cannot be replaced with another student payload',()=>{const f=fixture();f.request('submission.saveDraft',{...f.base,no:'2',name:'둘째학생',classId:'OTHER'});assert.equal(f.sheets['제출글'][1][3],'1')});
-test('personal code reset revokes existing student session',()=>{const f=fixture();f.request('student.codes',{token:f.teacher,classId:'C1',resetNo:'1'});assert.equal(f.request('submission.mine',{token:f.student,taskId:'T1'}).ok,false)});
+test('removing the student from the roster revokes the session',()=>{const f=fixture();f.request('student.set',{token:f.teacher,classId:'C1',students:[{no:'2',name:'둘째학생'}]});assert.equal(f.request('submission.mine',{token:f.student,taskId:'T1'}).ok,false)});
 test('logout removes token and wrong passwords are throttled',()=>{const f=fixture();f.request('auth.logout',{token:f.student});assert.throws(()=>f.request('submission.mine',{token:f.student,taskId:'T1'}),/인증/);for(let i=0;i<8;i++)assert.equal(f.request('teacher.login',{pw:'wrong'}).ok,false);assert.throws(()=>f.request('teacher.login',{pw:'test-password'}),/15분/)});
 test('password change invalidates teacher token',()=>{const f=fixture();f.sheets['설정'][2][1]='changed';assert.throws(()=>f.request('class.list',{token:f.teacher}),/변경/)});
 test('draft revision prevents stale tab overwrites',()=>{const f=fixture();const first=f.request('submission.saveDraft',f.base);assert.equal(first.data.revision,1);assert.equal(f.request('submission.saveDraft',{...f.base,text:'오래된 글'}).ok,false);assert.equal(f.sheets['제출글'][1][6],f.base.text)});
