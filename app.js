@@ -27,7 +27,8 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '0.6.0';
+  var APP_VERSION = '0.6.0'; // server protocol version
+  var UI_VERSION = '0.6.1';
   var editorLifecycle = null;
   var submissionNavigation = [];
   var teacherNoteCleanup = null;
@@ -84,6 +85,78 @@
   // ───────────────────────────────────────────
   // DOM 유틸 (사용자 입력 텍스트는 항상 textContent로)
   // ───────────────────────────────────────────
+  // Small, dependency-free line icons. Paths are fixed app assets, never user input.
+  function icon(name) {
+    var paths = {
+      leaf: 'M12 21V11M12 15C3 15 3 6 3 6s9-1 9 9ZM12 11c0-8 9-9 9-9s1 9-9 9Z',
+      pen: 'm15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14l-1 7ZM4 15l5 4',
+      grid: 'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z',
+      book: 'M12 5v16M12 5C8 2 3 3 3 3v16s5-1 9 2c4-3 9-2 9-2V3s-5-1-9 2Z',
+      check: 'm5 12 4 4L19 6',
+      spark: 'm12 2 3 7 7 3-7 3-3 7-3-7-7-3 7-3Z',
+      chat: 'M5 3h14a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H9l-6 4V5a2 2 0 0 1 2-2Z',
+      seed: 'M18 4C5 2 2 10 6 16s15 2 12-12ZM6 16 16 6',
+      tree: 'M12 21v-8M7 18H3l5-6H5l5-6H8l4-4 4 4h-2l5 6h-3l5 6h-4',
+      fruit: 'M12 7c-9-5-12 7-6 13 2 2 4 1 6 1s4 1 6-1c6-6 3-18-6-13ZM12 7V3m0 2c1-4 6-4 6-4s0 5-6 4',
+      arrow: 'M5 12h14m-6-6 6 6-6 6',
+      settings: 'M4 6h16M4 12h16M4 18h16M8 3v6M16 9v6M10 15v6',
+      people: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM20 21v-2a4 4 0 0 0-3-4m0-12a4 4 0 0 1 0 8'
+    };
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('class', 'line-icon'); svg.setAttribute('aria-hidden', 'true');
+    var path = document.createElementNS('http://www.w3.org/2000/svg', 'path'); path.setAttribute('d', paths[name] || paths.leaf);
+    svg.appendChild(path); return svg;
+  }
+  function growthTrack() {
+    return h('div', { class: 'growth-track', 'aria-label': '글의 성장 단계: 씨앗, 새싹, 나무, 열매' }, ['씨앗','새싹','나무','열매'].map(function (name, i) {
+      return h('div', { class: 'growth-stop' }, [h('span', { class: 'growth-symbol stage-' + i }, [icon(['seed','leaf','tree','fruit'][i])]), h('span', { text: name })]);
+    }));
+  }
+  function studioIntro(teacher) {
+    return h('section', { class: 'studio-intro' }, [
+      h('div', { class: 'eyebrow', text: teacher ? 'TEACHER’S STUDIO' : 'A LITTLE EVERY DAY' }),
+      h('h1', {}, [teacher ? '함께 쓰고,' : '작은 생각이,', h('br'), h('em', { text: teacher ? '함께 자라는 교실.' : '단단한 글이 되는 곳.' })]),
+      h('p', { class: 'intro-copy', text: teacher ? '아이들의 문장을 읽고, 다음 한 걸음을 함께 찾아 주세요. 글숲이 글쓰기의 과정을 모아 드립니다.' : '내 생각을 한 문장씩 꺼내 보세요. 쓰고, 읽고, 다시 다듬으며 나만의 글숲을 만들어 가요.' }),
+      h('div', { class: 'botanical-note', 'aria-hidden': 'true' }, [h('div', { class: 'note-lines' }, [h('span'),h('span'),h('span')]), icon('leaf'), h('span', { class: 'note-caption', text: '한 문장씩, 나답게.' })]),
+      growthTrack()
+    ]);
+  }
+  function sectionHeading(kicker, title, description) {
+    return h('header', { class: 'page-heading' }, [h('span', { class: 'eyebrow', text: kicker }), h('h1', { text: title }), description ? h('p', { text: description }) : null]);
+  }
+  function renderStudioNavigation(path) {
+    var nav = document.getElementById('studioNav'); clear(nav);
+    var teacher = path.indexOf('/teacher') === 0 && !!ssGet(KEYS.teacherToken);
+    var student = path.indexOf('/class') === 0 && !!getStudent();
+    document.body.classList.toggle('has-sidebar', teacher);
+    document.body.classList.toggle('student-session', student);
+    nav.hidden = !teacher;
+    if (!teacher) return;
+    nav.appendChild(h('div', { class: 'nav-caption', text: '나의 글쓰기 교실' }));
+    function link(href, text, glyph, active) { nav.appendChild(h('a', { href: href, class: 'nav-link' + (active ? ' active' : ''), 'aria-current': active ? 'page' : null }, [icon(glyph), h('span', { text: text })])); }
+    link('#/teacher/classes', '대시보드', 'grid', path === '/teacher/classes');
+    link('#/teacher/new', '새 학급 만들기', 'people', path === '/teacher/new');
+    var match = path.match(/^\/teacher\/class\/([^/]+)/);
+    if (match) {
+      nav.appendChild(h('div', { class: 'nav-caption section-caption', text: '선택한 학급' }));
+      link('#/teacher/class/' + match[1] + '/tasks', '글쓰기 과제', 'pen', path.indexOf('/tasks') >= 0);
+      link('#/teacher/class/' + match[1], '학급 · 입장 관리', 'settings', path.indexOf('/tasks') < 0);
+    }
+    nav.appendChild(h('div', { class: 'nav-note' }, [icon('leaf'), h('p', { text: '한 번의 점수보다,\n조금씩 달라지는 문장.' }), h('span', { text: '글숲 · 영쌤클래스' })]));
+  }
+  function decorateLabels(root) {
+    // Only app-owned decorative labels; essay content and user-entered text stay untouched.
+    root.querySelectorAll('.level-emoji, .lv-chip, .lv-dot').forEach(function (el) {
+      var glyph = {'🌰':'seed','🌱':'leaf','🌳':'tree','🍎':'fruit'}[el.textContent];
+      if (glyph) { var name = {'seed':'씨앗','leaf':'새싹','tree':'나무','fruit':'열매'}[glyph]; el.textContent = ''; el.appendChild(icon(glyph)); el.setAttribute('aria-label', name); }
+    });
+    root.querySelectorAll('h2, .big-emoji, .fb-block h3').forEach(function (el) {
+      if (el.childNodes.length !== 1 || el.firstChild.nodeType !== 3) return;
+      var text = el.textContent;
+      var match = text.match(/^(?:🌳|🌱|🌿|✏️|✍️|🤖|👩‍🏫|👍|🔧|🎯|🏁)\s*/u);
+      if (match) { el.textContent = text.slice(match[0].length); el.prepend(icon(/✏|✍/.test(match[0]) ? 'pen' : /🤖|🎯/.test(match[0]) ? 'spark' : /👩/.test(match[0]) ? 'chat' : 'leaf')); }
+    });
+  }
   function h(tag, attrs, children) {
     var el = document.createElement(tag);
     attrs = attrs || {};
@@ -99,10 +172,13 @@
       if (c === null || c === undefined || c === false) return;
       el.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
     });
+    if (attrs.class && /(?:level-emoji|lv-chip|lv-dot)/.test(attrs.class)) {
+      var names = {'🌰':'seed','🌱':'leaf','🌳':'tree','🍎':'fruit'}; if (names[el.textContent]) { var label = el.textContent; el.setAttribute('role', 'img'); el.setAttribute('aria-label', {'🌰':'씨앗','🌱':'새싹','🌳':'나무','🍎':'열매'}[label]); el.textContent = ''; el.appendChild(icon(names[label])); }
+    }
     return el;
   }
   function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
-  function render() { clear($app); for (var i = 0; i < arguments.length; i++) if (arguments[i]) $app.appendChild(arguments[i]); window.scrollTo(0, 0); }
+  function render() { clear($app); for (var i = 0; i < arguments.length; i++) if (arguments[i]) $app.appendChild(arguments[i]); decorateLabels($app); window.scrollTo(0, 0); }
 
   var toastTimer = null;
   function toast(msg, isError) {
@@ -185,6 +261,7 @@
     var path = hash.replace(/^#/, '');
     $app.className = 'app' + (path.indexOf('/teacher') === 0 ? ' teacher-app' : '');
     renderTopbar(path);
+    renderStudioNavigation(path);
     if (path === '/' || path === '') return viewHome();
     if (path === '/teacher') return viewTeacher();
     if (path === '/teacher/classes') return viewClasses();
@@ -215,7 +292,7 @@
       $topRight.appendChild(h('span', { class: 'chip', text: student.className + ' · ' + student.no + '번 ' + student.name }));
       $topRight.appendChild(h('button', { class: 'small', text: '사용 마치기', onclick: function () { leaveSession('student'); } }));
     } else {
-      $topRight.appendChild(h('a', { href: '#/teacher', class: 'btn small ghost', text: '교사 모드', style: 'color:#fff;border-color:rgba(255,255,255,.6)' }));
+      $topRight.appendChild(h('a', { href: '#/teacher', class: 'btn small ghost', text: '선생님 입장' }));
     }
   }
 
@@ -250,7 +327,7 @@
     var inNo = h('input', { type: 'text', inputmode: 'numeric', placeholder: '예: 12' });
     var inName = h('input', { type: 'text', placeholder: '예: 김글숲', 'aria-label': '이름' });
     var inPin = h('input', { type: 'password', placeholder: '선생님이 나에게 준 개인 입장 코드', autocomplete: 'off', 'aria-label': '개인 입장 코드' });
-    var btn = h('button', { class: 'big', text: '글숲에 들어가기 🌳' });
+    var btn = h('button', { class: 'big', text: '내 글숲으로 들어가기 →' });
 
     function join() {
       var code = inCode.value.trim().toUpperCase();
@@ -273,14 +350,11 @@
     btn.addEventListener('click', join);
     [inCode, inNo, inName, inPin].forEach(function (i) { i.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') join(); }); });
 
-    var hero = h('div', { class: 'hero' }, [
-      h('h1', { text: '🌳 글숲' }),
-      h('p', { text: '내가 쓴 글이 자라는 곳' })
-    ]);
+    var hero = studioIntro(false);
 
     var card = h('div', { class: 'card' }, [
       h('h2', { text: '우리 반에 들어가기' }),
-      h('p', { class: 'desc', text: '선생님이 알려 준 학급 코드와 내 번호, 이름을 적어 주세요.' }),
+      h('p', { class: 'desc', text: '선생님이 알려 준 정보로 나의 글쓰기 교실에 들어가요.' }),
       h('label', { text: '학급 코드' }), inCode,
       h('div', { class: 'row' }, [
         h('div', {}, [h('label', { text: '번호' }), inNo]),
@@ -292,7 +366,9 @@
       !hasApi ? h('p', { class: 'hint center', text: '아직 서버가 연결되지 않았어요. 선생님이 보내 준 학급 링크(QR)로 들어오면 자동으로 연결돼요.' }) : null
     ]);
 
-    render(hero, card);
+    card.classList.add('entry-card');
+    card.prepend(h('div', { class: 'eyebrow', text: 'WELCOME TO GEULSUP' }));
+    render(h('div', { class: 'entry-layout' }, [hero, card]));
     (pendCode ? inNo : inCode).focus();
   }
 
@@ -325,14 +401,17 @@
     var list = h('div', { class: 'task-list' }, [h('div', { class: 'loading', text: '과제를 불러오는 중…' })]);
     var card = h('div', { class: 'card student-home' }, [
       h('div', { class: 'muted', text: s.className }),
-      h('div', { class: 'greet', text: s.name + ' 님, 어서 와요! 🌱' }),
-      list
+      h('div', { class: 'greet', text: s.name + ' 님의 글쓰기 스튜디오' }),
+      h('p', { class: 'welcome-copy', text: '오늘의 생각을 글로 남겨 볼까요? 완벽하지 않아도 괜찮아요.' }),
+      growthTrack()
     ]);
-    render(card);
+    var stats = h('div', { class: 'studio-stats', 'aria-label': '열린 과제 현황' });
+    render(card, stats, sectionHeading('MY WRITING', '나의 글쓰기 과제', '이어서 쓸 글이나 새롭게 시작할 글을 골라 보세요.'), list);
 
     fetchStudentTasks()
       .then(function (tasks) {
         clear(list);
+        [['열린 과제', tasks.length], ['작성 중', tasks.filter(function (t) { return t.progress === '작성 중'; }).length], ['피드백 도착', tasks.filter(function (t) { return t.progress === '피드백 도착'; }).length]].forEach(function (item) { stats.appendChild(h('div', { class: 'studio-stat' }, [h('span', { text: item[0] }), h('strong', { text: String(item[1]) })])); });
         if (!tasks.length) {
           list.appendChild(h('div', { class: 'empty' }, [
             h('span', { class: 'big-emoji', text: '✏️' }),
@@ -342,8 +421,9 @@
           ]));
           return;
         }
-        tasks.forEach(function (t) {
-          list.appendChild(h('a', { href: '#/class/task/' + t.taskId, class: 'task-item' }, [
+        tasks.forEach(function (t, index) {
+          list.appendChild(h('a', { href: '#/class/task/' + t.taskId, class: 'task-item', 'data-progress': t.progress || '시작 전' }, [
+            h('div', { class: 'task-card-top' }, [icon('book'), h('span', { class: 'task-number', text: String(index + 1).padStart(2, '0') })]),
             h('div', {}, [
               h('span', { class: 'badge genre', text: t.genreLabel }),
               h('span', { class: 'badge progress', text: t.progress || '시작 전' }),
@@ -428,7 +508,7 @@
   function buildStudentTask(t, mine) {
     if (editorLifecycle) { editorLifecycle.dispose(false); editorLifecycle = null; }
     var taskId = t.taskId;
-    var header = h('div', { class: 'card' }, [
+    var header = h('div', { class: 'card writing-brief' }, [
       h('span', { class: 'badge genre', text: t.genreLabel }),
       h('h2', { text: t.title, style: 'margin-top:8px' }),
       h('div', { class: 'prompt-box', text: t.prompt }),
@@ -519,7 +599,7 @@
     var saveState = h('span', { class: 'save-state', text: draft.savedAt ? '저장됨 ' + fmtTime(draft.savedAt) : '' });
     var condBox = h('div', { class: 'cond-list' });
     var btnSave = h('button', { class: 'small secondary', text: '지금 저장' });
-    var btnSubmit = h('button', { class: 'big', text: '제출하기 🌳' });
+    var btnSubmit = h('button', { class: 'big', text: '글 제출하기' });
 
     var dirty = false, saving = false, submitting = false, disposed = false, preventLocalWrites = false, localOK = true, savePromise = Promise.resolve(), timer = null;
     var lastSent = prefilled ? { title: null, text: null } : serverDraft;
@@ -590,7 +670,7 @@
         if (!disposed) toast(e.message, true);
       }).finally(function () {
         submitting = false; ta.disabled = false; inTitle.disabled = false; btnSave.disabled = false;
-        btnSubmit.textContent = '제출하기 🌳'; refresh();
+        btnSubmit.textContent = '글 제출하기'; refresh();
       });
     });
     function beforeUnload(ev) { if (hasChanges() || submitting) { localSave(); ev.preventDefault(); ev.returnValue = ''; } }
@@ -604,8 +684,8 @@
       }
     };
 
-    var roundLabel = (mine.nextRound > 1 ? mine.nextRound + '차 · 고쳐 쓰기 ✍️' : '글쓰기') + (mine.maxRounds ? ' (' + mine.maxRounds + '차까지)' : '');
-    var editor = h('div', { class: 'card' }, [
+    var roundLabel = (mine.nextRound > 1 ? mine.nextRound + '차 · 고쳐 쓰기' : '글쓰기') + (mine.maxRounds ? ' (' + mine.maxRounds + '차까지)' : '');
+    var editor = h('div', { class: 'card writing-paper' }, [
       h('div', { class: 'row', style: 'align-items:center' }, [
         h('h2', { text: roundLabel, style: 'margin:0' }),
         h('div', { class: 'fit editor-status' }, [counter, saveState])
@@ -637,8 +717,8 @@
 
     var workspace = h('div', { class: 'writing-workspace' + (fbCard ? ' has-feedback' : '') }, [editor, fbCard]);
     if (fbCard) workspace.prepend(h('div', { class: 'workspace-tabs', role: 'group', 'aria-label': '글쓰기 화면 선택' }, [
-      h('button', { class: 'small', text: '내 글 쓰기', onclick: function () { workspace.classList.remove('show-feedback'); } }),
-      h('button', { class: 'small secondary', text: '피드백 보기', onclick: function () { workspace.classList.add('show-feedback'); } })
+      h('button', { class: 'small', 'aria-pressed': 'true', text: '내 글 쓰기', onclick: function () { workspace.classList.remove('show-feedback'); this.setAttribute('aria-pressed', 'true'); this.nextElementSibling.setAttribute('aria-pressed', 'false'); } }),
+      h('button', { class: 'small secondary', 'aria-pressed': 'false', text: '피드백 보기', onclick: function () { workspace.classList.add('show-feedback'); this.setAttribute('aria-pressed', 'true'); this.previousElementSibling.setAttribute('aria-pressed', 'false'); } })
     ]));
     render(header, workspace, prev);
     refresh();
@@ -717,7 +797,7 @@
     ]);
 
     var loginCard = h('div', { class: 'card' }, [
-      h('h2', { text: '2. 교사 로그인' }),
+      h('h2', { text: '선생님, 어서 오세요' }),
       h('label', { text: '교사 비밀번호' }), inPw,
       btnLogin,
       h('p', { class: 'hint', text: '로그인은 최대 6시간 유지돼요. 사용을 마치면 로그아웃해 주세요. 학생이 쓰는 기기에서는 로그인하지 마세요.' })
@@ -725,7 +805,8 @@
 
     var help = h('details', { class: 'setup-guide' }, [h('summary', { text: '처음 연결하시나요? 설정 안내 보기' }), guide, connect]);
     if (!apiId) help.open = true;
-    render(loginCard, help);
+    loginCard.classList.add('entry-card'); loginCard.prepend(h('div', { class: 'eyebrow', text: 'TEACHER ACCESS' }));
+    render(h('div', { class: 'entry-layout teacher-entry' }, [studioIntro(true), h('div', {}, [loginCard, help])]));
   }
 
   // ───────────────────────────────────────────
@@ -753,11 +834,15 @@
       ])
     ]);
 
-    render(card, setup);
+    var stats = h('div', { class: 'studio-stats' });
+    card.classList.add('dashboard-classes');
+    var settings = h('details', { class: 'service-details' }, [h('summary', {}, [icon('settings'), '연결 상태 · 설정']), setup]);
+    render(sectionHeading('TEACHER’S STUDIO', '오늘도, 함께 자라는 글숲', '아이들의 생각을 만나고, 다음 문장을 함께 만들어 주세요.'), stats, card, settings);
 
     teacherApi('class.list')
       .then(function (d) {
         clear(list);
+        [['운영 중인 학급', d.classes.filter(function (c) { return c.status === '활성'; }).length], ['등록된 학생', d.classes.reduce(function (n,c) { return n + Number(c.studentCount || 0); }, 0)], ['글쓰기 과제', d.classes.reduce(function (n,c) { return n + Number(c.taskCount || 0); }, 0)]].forEach(function (item) { stats.appendChild(h('div', { class: 'studio-stat' }, [h('span', { text: item[0] }), h('strong', { text: String(item[1]) })])); });
         if (!d.classes.length) {
           list.appendChild(h('div', { class: 'empty' }, [h('span', { class: 'big-emoji', text: '🌱' }), '아직 학급이 없어요. 첫 학급을 만들어 보세요!']));
           return;
@@ -771,7 +856,7 @@
               h('div', { class: 'code', text: c.code })
             ]),
             h('div', { class: 'btns' }, [
-              h('a', { href: '#/teacher/class/' + c.classId + '/tasks', class: 'btn small', text: '✏️ 과제' }),
+              h('a', { href: '#/teacher/class/' + c.classId + '/tasks', class: 'btn small', text: '과제 살펴보기 →' }),
               h('a', { href: '#/teacher/class/' + c.classId, class: 'btn small secondary', text: '링크·QR·명단' })
             ])
           ]));
@@ -1548,8 +1633,8 @@
     function warnNote(ev) { if (teacherDirty()) { ev.preventDefault(); ev.returnValue = ''; } }
     window.addEventListener('beforeunload', warnNote);
     var guard = function (ev) { var link = ev.target.closest('a[href]'); if (link && teacherDirty() && !confirm('선생님 한마디·단계를 아직 저장하지 않았어요. 이동할까요?')) { ev.preventDefault(); ev.stopPropagation(); } };
-    $app.addEventListener('click', guard, true);
-    teacherNoteCleanup = function () { window.removeEventListener('beforeunload', warnNote); $app.removeEventListener('click', guard, true); };
+    document.addEventListener('click', guard, true);
+    teacherNoteCleanup = function () { window.removeEventListener('beforeunload', warnNote); document.removeEventListener('click', guard, true); };
     btn.addEventListener('click', function () {
       var finalLevels = {};
       Object.keys(selects).forEach(function (id) { var v = parseInt(selects[id].value, 10); if (v) finalLevels[id] = v; });
@@ -1690,5 +1775,5 @@
   route();
 
   // 테스트용 노출 (브라우저 콘솔)
-  window.__geulsup = { version: APP_VERSION, parseRoster: parseRoster, extractDeployId: extractDeployId, taskConditionText: taskConditionText, bandForGrade: bandForGrade, countChars: countChars, conditionChecks: conditionChecks, fmtTime: fmtTime, levelSummary: levelSummary };
+  window.__geulsup = { version: APP_VERSION, uiVersion: UI_VERSION, parseRoster: parseRoster, extractDeployId: extractDeployId, taskConditionText: taskConditionText, bandForGrade: bandForGrade, countChars: countChars, conditionChecks: conditionChecks, fmtTime: fmtTime, levelSummary: levelSummary };
 })();
