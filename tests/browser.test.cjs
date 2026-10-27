@@ -50,18 +50,21 @@ async function main(){
   },{role,ID,opts});
   return page;
  }
+ const entry=await pageFor('guest');await entry.goto(url);await entry.locator('.entry-layout').waitFor();await entry.screenshot({path:'/tmp/geulsup-entry-desktop.png',fullPage:true});await entry.setViewportSize({width:390,height:844});assert.ok(await entry.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await entry.screenshot({path:'/tmp/geulsup-entry-mobile.png',fullPage:true});await entry.close();
+ const overview=await pageFor('student');await overview.goto(url+'/#/class');await overview.locator('.task-item').waitFor();await overview.screenshot({path:'/tmp/geulsup-student-home.png',fullPage:true});await overview.close();
+ const dashboard=await pageFor('teacher');await dashboard.goto(url+'/#/teacher/classes');await dashboard.locator('.class-item').waitFor();await dashboard.screenshot({path:'/tmp/geulsup-dashboard.png',fullPage:true});await dashboard.setViewportSize({width:390,height:844});assert.ok(await dashboard.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await dashboard.screenshot({path:'/tmp/geulsup-dashboard-mobile.png',fullPage:true});await dashboard.close();
  const p=await pageFor('student',{local:{round:2,revision:0,title:'복원 제목',text:'복원된 새 글입니다.'}});
  await p.goto(url+'/#/class/task/T1');await p.locator('.essay-editor').waitFor();assert.equal(await p.locator('.essay-editor').inputValue(),'복원된 새 글입니다.');
  await p.waitForTimeout(3000);assert.equal(saved.at(-1).text,'복원된 새 글입니다.');assert.equal(saved.at(-1).token,'student-token');
  await p.locator('.essay-editor').fill('학교에는 커다란 나무가 있어요.');
- await p.getByRole('button',{name:'제출하기 🌳',exact:true}).click();
+ await p.getByRole('button',{name:'글 제출하기',exact:true}).click();
  assert.equal(await p.locator('.essay-editor').isDisabled(),true);
  await p.waitForTimeout(800);assert.equal(submits,1);assert.ok(saved.at(-1).revision>=1);
  await p.screenshot({path:'/tmp/geulsup-student-desktop.png',fullPage:true});
  await p.setViewportSize({width:768,height:1024});await p.getByRole('button',{name:'피드백 보기',exact:true}).click();assert.equal(await p.locator('.fb-card').isVisible(),true);assert.equal(await p.locator('.essay-editor').isVisible(),false);
  await p.screenshot({path:'/tmp/geulsup-student-tablet.png',fullPage:true});
  await p.setViewportSize({width:390,height:844});assert.ok(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await p.close();
- failSave=true;const fail=await pageFor('student',{storageFail:true});await fail.goto(url+'/#/class/task/T1');await fail.locator('.essay-editor').fill('저장 실패 확인');await fail.getByRole('button',{name:'제출하기 🌳',exact:true}).click();await fail.waitForTimeout(150);assert.equal(submits,1);assert.match(await fail.locator('.save-state').textContent(),/글을 복사/);assert.equal(await fail.locator('.essay-editor').isDisabled(),false);await fail.close();failSave=false;
+ failSave=true;const fail=await pageFor('student',{storageFail:true});await fail.goto(url+'/#/class/task/T1');await fail.locator('.essay-editor').fill('저장 실패 확인');await fail.getByRole('button',{name:'글 제출하기',exact:true}).click();await fail.waitForTimeout(150);assert.equal(submits,1);assert.match(await fail.locator('.save-state').textContent(),/글을 복사/);assert.equal(await fail.locator('.essay-editor').isDisabled(),false);await fail.close();failSave=false;
  const conflict=await pageFor('student',{local:{round:1,revision:0,title:'옛 글',text:'덮어쓰면 안 되는 글'}});await conflict.goto(url+'/#/class/task/T1');await conflict.locator('.essay-editor').waitFor();assert.equal(await conflict.locator('.essay-editor').inputValue(),sub.text);assert.equal(await conflict.locator('.recovery').count(),1);await conflict.close();
  delaySave=500;
  const leaving=await pageFor('student');await leaving.goto(url+'/#/class/task/T1');await leaving.locator('.essay-editor').fill('사용을 마치기 전의 글');await leaving.getByRole('button',{name:'지금 저장',exact:true}).click();await leaving.getByRole('button',{name:'사용 마치기',exact:true}).click();await leaving.waitForTimeout(800);assert.equal(await leaving.evaluate(()=>Object.keys(localStorage).some(k=>k.startsWith('geulsup_draft_'))),false);await leaving.close();delaySave=0;

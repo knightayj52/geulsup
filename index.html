@@ -19,29 +19,32 @@
   <title>글숲 · 글쓰기 교실</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=0.6.0">
+  <link rel="stylesheet" href="style.css?v=0.6.1">
+  <link rel="stylesheet" href="studio.css?v=0.6.1">
 </head>
 <body>
 
 <header class="topbar">
   <a href="#/" class="brand" id="brandLink">
-    <span class="brand-mark">🌳</span>
-    <span class="brand-name">글숲</span>
+    <span class="brand-mark"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 27V14M16 19C5 19 5 7 5 7s11-1 11 12ZM16 14C16 4 27 3 27 3s1 11-11 11Z"/></svg></span>
+    <span class="brand-name">글숲<span class="brand-tagline">생각을 키우는 글쓰기 스튜디오</span></span>
   </a>
   <div class="topbar-right" id="topbarRight"></div>
 </header>
+
+<nav id="studioNav" class="studio-nav" aria-label="교사 메뉴" hidden></nav>
 
 <main id="app" class="app">
   <div class="loading">불러오는 중…</div>
 </main>
 
 <footer class="footer">
-  © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
+  <span>한 문장씩, 나답게.</span><span>© 2026 영쌤클래스 · 글숲</span>
 </footer>
 
 <div id="toast" class="toast" aria-live="polite"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-<script src="app.js?v=0.6.0"></script>
+<script src="app.js?v=0.6.1"></script>
 </body>
 </html>
