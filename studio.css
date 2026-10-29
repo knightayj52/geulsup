@@ -251,3 +251,44 @@ body.has-sidebar .footer { margin-left: 228px; }
   .task-list { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
+
+/* Student feedback: separate reading from writing, with readable semantic cues. */
+.student-session .writing-paper { background: #fff; color: #202e38; }
+.student-session .writing-paper .hint,
+.student-session .editor-status .char-count,
+.student-session .editor-status .save-state,
+.student-session .draft-compare > summary { color: #455565; font-size: 14px; }
+.student-session .cond { font-size: 13px; }
+.student-session .cond.ok { color: #295438; }
+.card.student-feedback { background: #edf4ff; border: 2px solid #6686b3; border-top: 6px solid #284f83; color: #233c5a; }
+.student-feedback .fb-head h2 { color: #173b6b; font-size: 21px; }
+.student-feedback .fb-head .muted { color: #455c78; font-size: 13px; }
+.student-feedback .fb-summary { color: #304a69; font-size: 16px; }
+.student-feedback .fb-block { padding: 18px; border-width: 1px; border-left-width: 5px; margin-top: 16px; }
+.student-feedback .fb-block h3 { display: flex; align-items: center; gap: 8px; font-size: 16px; line-height: 1.5; color: inherit; }
+.student-feedback .fb-block .line-icon { flex-shrink: 0; width: 22px; height: 22px; }
+.student-feedback .fb-block p, .student-feedback .fb-block ul { font-size: 16px; line-height: 1.85; color: inherit; overflow-wrap: anywhere; }
+.student-feedback .fb-next { background: #244d80; border-color: #244d80; color: #fff; box-shadow: 0 4px 12px #173b6b16; }
+.student-feedback .fb-next p { font-size: 18px; font-weight: 700; }
+.student-feedback .fb-good { background: #eaf6ee; color: #204d34; border-color: #45805b; }
+.student-feedback .fb-fix, .student-feedback .fb-corr { background: #fff0e4; color: #693a21; border-color: #b36a36; }
+.student-feedback .fb-teacher { background: #f1eafd; color: #513773; border-color: #8a65b4; }
+.student-feedback .feedback-details { border-top-color: #9db4d2; }
+.student-feedback .feedback-details > summary { color: #173b6b; font-size: 16px; font-weight: 700; padding: 12px; background: #fff; border: 1px solid #8fa9cb; border-radius: 8px; }
+.student-feedback .feedback-details[open] > summary { margin-bottom: 16px; }
+.student-feedback .crit-fb { border-color: #98afcd; color: #233c5a; }
+.student-feedback .crit-fb summary, .student-feedback .crit-fb-body { font-size: 16px; }
+.student-feedback .hint, .student-feedback .fb-quote-label { color: #455565; font-size: 14px; }
+.student-feedback .fb-tip { color: #244d80; }
+.student-feedback .corr-kind { color: #633a24; background: #f7ddc7; font-size: 13px; }
+.student-feedback .corr-orig { color: #842f2f; }
+.student-feedback .corr-fixed { color: #245735; }
+.student-feedback .corr { overflow-wrap: anywhere; }
+.student-session .workspace-tabs { background: #f7f6f0; gap: 10px; }
+.student-session .workspace-tabs button { background: #fff; color: #284f83; border: 2px solid #6686b3; font-size: 16px; min-height: 48px; }
+.student-session .workspace-tabs button[aria-pressed=true] { background: #244d80; color: #fff; border-color: #244d80; box-shadow: inset 0 -3px 0 #9dbde6; }
+.student-feedback summary:focus-visible, .student-session .workspace-tabs button:focus-visible { outline: 3px solid #244d80; outline-offset: 3px; }
+@media (max-width: 620px) {
+  .card.student-feedback { padding: 18px; }
+  .student-feedback .fb-block { padding: 14px; }
+}

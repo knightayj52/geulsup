@@ -29,7 +29,7 @@
   'use strict';
 
   var APP_VERSION = '0.6.1'; // server protocol version
-  var UI_VERSION = '0.6.2';
+  var UI_VERSION = '0.6.3';
   var editorLifecycle = null;
   var submissionNavigation = [];
   var teacherNoteCleanup = null;
@@ -1686,7 +1686,7 @@
 
     function list(title, items, cls) {
       if (!items || !items.length) return null;
-      return h('div', { class: 'fb-block ' + cls }, [h('h3', { text: title }), h('ul', {}, items.map(function (x) { return h('li', { text: x }); }))]);
+      return h('div', { class: 'fb-block ' + cls }, [h('h3', {}, forStudent ? [icon(cls === 'fb-good' ? 'check' : 'pen'), h('span', { text: title.replace(/^[^가-힣]+/, '') })] : [title]), h('ul', {}, items.map(function (x) { return h('li', { text: x }); }))]);
     }
 
     var corrections = null;
@@ -1722,7 +1722,7 @@
       ]);
     }
 
-    var teacherNote = fb.teacherNote ? h('div', { class: 'fb-block fb-teacher' }, [h('h3', { text: '👩‍🏫 선생님 한마디' }), h('p', { text: fb.teacherNote })]) : null;
+    var teacherNote = fb.teacherNote ? h('div', { class: 'fb-block fb-teacher' }, [h('h3', {}, [icon('chat'), h('span', { text: '선생님 한마디' })]), h('p', { text: fb.teacherNote })]) : null;
 
     var head = h('div', { class: 'fb-head' }, [
       h('div', {}, [
@@ -1745,13 +1745,18 @@
       window.addEventListener('hashchange', function once() { window.removeEventListener('hashchange', once); markSeen(); });
       window.addEventListener('pagehide', markSeen);
     }
-    return h('div', { class: 'card fb-card' }, [
+    var nextStep = fb.nextTry ? h('div', { class: 'fb-block fb-next' }, [
+      h('h3', {}, [icon('spark'), h('span', { text: forStudent ? '이번에 고칠 한 가지' : '다음에 꼭 해 볼 한 가지' })]),
+      h('p', { text: fb.nextTry })
+    ]) : null;
+    return h('div', { class: 'card fb-card' + (forStudent ? ' student-feedback' : '') }, [
       head,
+      forStudent ? nextStep : null,
       fb.summary ? h('div', { class: 'fb-summary', text: fb.summary }) : null,
       forStudent && fb.strengths && fb.strengths.length ? list('잘한 점', [fb.strengths[0]], 'fb-good') : null,
-      fb.nextTry ? h('div', { class: 'fb-block fb-next' }, [h('h3', { text: '🎯 다음에 꼭 해 볼 한 가지' }), h('p', { text: fb.nextTry })]) : null,
+      forStudent ? teacherNote : nextStep,
       feedbackDetails,
-      teacherNote
+      forStudent ? null : teacherNote
     ]);
   }
 
