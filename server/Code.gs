@@ -29,7 +29,7 @@
  */
 
 var APP_NAME = '글숲';
-var APP_VERSION = '0.6.1';
+var APP_VERSION = '0.7.0';
 var requestCache_ = {};
 
 // ─────────────────────────────────────────────
@@ -55,7 +55,11 @@ var GENRES = [
   { key: 'explain', label: '설명하는 글' },
   { key: 'argue',   label: '주장하는 글' },
   { key: 'propose', label: '제안하는 글' },
-  { key: 'review',  label: '감상문' }
+  { key: 'review',  label: '감상문' },
+  { key: 'reflect', label: '성찰 에세이' },
+  { key: 'experience', label: '경험하는 글' },
+  { key: 'report', label: '관찰·탐구 보고서' },
+  { key: 'letter', label: '편지글' }
 ];
 var BANDS = ['3-4', '5-6'];
 var TASK_STATUSES = ['열림', '닫힘'];
@@ -202,6 +206,270 @@ var DEFAULT_RUBRICS = [
     '어떤 부분에서 왜 그렇게 느꼈는지 까닭을 들어 쓴다.',
     '느낀 점을 자기 경험·생각·다른 작품과 연결하고, 작품이 자신에게 준 의미를 쓴다.'] }
 ];
+
+// 활동별 확장 루브릭: 기존 루브릭 시트에 없는 갈래는 아래 기본값으로 제공
+DEFAULT_RUBRICS = DEFAULT_RUBRICS.concat([
+  {
+    "genre": "reflect",
+    "band": "3-4",
+    "id": "R1",
+    "name": "활동 경험과 근거",
+    "group": "갈래",
+    "levels": [
+      "어떤 활동을 했는지 드러나지 않는다.",
+      "활동 이름이나 한 일을 나열하지만 구체적인 장면이 없다.",
+      "활동 중 내가 한 일과 기억에 남는 장면을 구체적으로 쓴다.",
+      "내가 한 일과 그때 생긴 일을 구체적인 예를 들어 알기 쉽게 쓴다."
+    ]
+  },
+  {
+    "genre": "reflect",
+    "band": "3-4",
+    "id": "R2",
+    "name": "배움과 생각의 변화",
+    "group": "갈래",
+    "levels": [
+      "배운 점이나 생각이 드러나지 않는다.",
+      "재미있었다·알게 되었다고 쓰지만 무엇을 왜 배웠는지 설명하지 않는다.",
+      "새롭게 알게 된 점이나 달라진 생각을 활동 경험과 연결해 설명한다.",
+      "처음 생각과 지금 생각을 비교하며 어떤 경험 때문에 달라졌는지 설명한다."
+    ]
+  },
+  {
+    "genre": "reflect",
+    "band": "3-4",
+    "id": "R3",
+    "name": "나의 과정 돌아보기",
+    "group": "갈래",
+    "levels": [
+      "나의 참여 과정에 대한 돌아보기가 없다.",
+      "잘했다·못했다는 판단만 있고 까닭이 없다.",
+      "잘한 점이나 어려웠던 점을 구체적인 행동과 까닭으로 설명한다.",
+      "잘한 점과 어려웠던 점을 살펴보고 내가 쓴 방법이 도움이 되었는지 예를 들어 설명한다."
+    ]
+  },
+  {
+    "genre": "reflect",
+    "band": "3-4",
+    "id": "R4",
+    "name": "다음 실천 계획",
+    "group": "갈래",
+    "levels": [
+      "다음에 할 일에 대한 계획이 없다.",
+      "열심히 하겠다·잘하겠다는 다짐만 있다.",
+      "이번에 배운 점을 바탕으로 다음에 할 구체적인 행동을 정한다.",
+      "언제 어떤 상황에서 어떻게 행동할지 예를 들어 실천할 수 있게 쓴다."
+    ]
+  },
+  {
+    "genre": "experience",
+    "band": "3-4",
+    "id": "G1",
+    "name": "사건의 흐름",
+    "group": "갈래",
+    "levels": [
+      "겪은 일이 무엇인지 알기 어렵다.",
+      "일어난 일은 있지만 순서나 상황이 불분명하다.",
+      "언제·어디서 겪은 일인지 드러나며 중요한 일이 순서대로 이어진다.",
+      "중요한 장면을 자세히 쓰고 일이 일어난 순서가 자연스럽게 이어진다."
+    ]
+  },
+  {
+    "genre": "experience",
+    "band": "3-4",
+    "id": "G2",
+    "name": "장면과 생각 표현",
+    "group": "갈래",
+    "levels": [
+      "장면이나 나의 생각·느낌이 드러나지 않는다.",
+      "일을 나열하고 좋았다·슬펐다는 느낌만 덧붙인다.",
+      "행동·대화·주변 모습으로 장면을 보여 주고 그때의 생각·느낌을 쓴다.",
+      "장면이 떠오르게 자세히 쓰고 왜 그런 생각·느낌이 들었는지 설명한다."
+    ]
+  },
+  {
+    "genre": "report",
+    "band": "3-4",
+    "id": "G1",
+    "name": "탐구 과정과 기록",
+    "group": "갈래",
+    "levels": [
+      "무엇을 알아보았는지 알기 어렵다.",
+      "관찰·탐구 대상은 있지만 방법이나 기록이 부족하다.",
+      "알아볼 내용과 관찰·조사 방법을 밝히고 결과를 구체적으로 기록한다.",
+      "관찰한 때·방법을 밝히고 비교할 수 있도록 특징이나 변화를 자세히 기록한다."
+    ]
+  },
+  {
+    "genre": "report",
+    "band": "3-4",
+    "id": "G2",
+    "name": "근거에 따른 해석",
+    "group": "갈래",
+    "levels": [
+      "결과에 대한 설명이 없거나 기록과 관계없다.",
+      "알게 된 점은 있지만 어떤 기록을 근거로 했는지 불분명하다.",
+      "관찰·조사한 사실과 나의 생각을 구분하고 기록을 근거로 알게 된 점을 설명한다.",
+      "기록에서 공통점·차이점을 찾아 알게 된 점과 더 궁금한 점을 쓴다."
+    ]
+  },
+  {
+    "genre": "letter",
+    "band": "3-4",
+    "id": "G1",
+    "name": "받는 사람과 목적",
+    "group": "갈래",
+    "levels": [
+      "누구에게 왜 쓰는지 알기 어렵다.",
+      "받는 사람은 알 수 있지만 전하려는 말이 흐릿하다.",
+      "받는 사람에게 전하고 싶은 말과 그 까닭이 분명하다.",
+      "받는 사람이 이해할 수 있도록 전하고 싶은 말을 구체적인 일이나 까닭과 함께 쓴다."
+    ]
+  },
+  {
+    "genre": "letter",
+    "band": "3-4",
+    "id": "G2",
+    "name": "상대에 맞는 표현과 형식",
+    "group": "갈래",
+    "levels": [
+      "편지의 기본 형식이나 상대에 맞는 표현이 거의 없다.",
+      "인사나 끝맺음은 있지만 빠진 요소가 있거나 말투가 일정하지 않다.",
+      "받는 사람·인사·전할 말·끝인사·보내는 사람이 드러나며 관계에 맞는 말투를 쓴다.",
+      "편지 형식이 갖춰지고 상대의 입장을 배려한 구체적인 표현과 자연스러운 끝맺음을 쓴다."
+    ]
+  },
+  {
+    "genre": "reflect",
+    "band": "5-6",
+    "id": "R1",
+    "name": "활동 경험과 근거",
+    "group": "갈래",
+    "levels": [
+      "어떤 활동을 했는지 드러나지 않는다.",
+      "활동 이름이나 한 일을 나열하지만 구체적인 장면이 없다.",
+      "활동 중 내가 한 일과 기억에 남는 장면을 구체적으로 쓴다.",
+      "핵심 장면과 나의 선택·결과를 연결하고 기록이나 관찰을 근거로 설명한다."
+    ]
+  },
+  {
+    "genre": "reflect",
+    "band": "5-6",
+    "id": "R2",
+    "name": "배움과 생각의 변화",
+    "group": "갈래",
+    "levels": [
+      "배운 점이나 생각이 드러나지 않는다.",
+      "재미있었다·알게 되었다고 쓰지만 무엇을 왜 배웠는지 설명하지 않는다.",
+      "새롭게 알게 된 점이나 달라진 생각을 활동 경험과 연결해 설명한다.",
+      "활동 전후의 생각을 비교하고 변화의 이유와 다른 상황에 적용할 의미를 설명한다."
+    ]
+  },
+  {
+    "genre": "reflect",
+    "band": "5-6",
+    "id": "R3",
+    "name": "나의 과정 돌아보기",
+    "group": "갈래",
+    "levels": [
+      "나의 참여 과정에 대한 돌아보기가 없다.",
+      "잘했다·못했다는 판단만 있고 까닭이 없다.",
+      "잘한 점이나 어려웠던 점을 구체적인 행동과 까닭으로 설명한다.",
+      "나의 방법이 결과에 준 영향을 분석하고 효과가 있었던 방법과 바꿀 방법을 근거로 설명한다."
+    ]
+  },
+  {
+    "genre": "reflect",
+    "band": "5-6",
+    "id": "R4",
+    "name": "다음 실천 계획",
+    "group": "갈래",
+    "levels": [
+      "다음에 할 일에 대한 계획이 없다.",
+      "열심히 하겠다·잘하겠다는 다짐만 있다.",
+      "이번에 배운 점을 바탕으로 다음에 할 구체적인 행동을 정한다.",
+      "언제·어떻게 실천할지와 실천 결과를 확인할 방법까지 제시한다."
+    ]
+  },
+  {
+    "genre": "experience",
+    "band": "5-6",
+    "id": "G1",
+    "name": "사건의 흐름",
+    "group": "갈래",
+    "levels": [
+      "겪은 일이 무엇인지 알기 어렵다.",
+      "일어난 일은 있지만 순서나 상황이 불분명하다.",
+      "언제·어디서 겪은 일인지 드러나며 중요한 일이 순서대로 이어진다.",
+      "핵심 사건을 중심으로 원인·과정·결과를 자연스럽게 연결하고 장면의 비중을 조절한다."
+    ]
+  },
+  {
+    "genre": "experience",
+    "band": "5-6",
+    "id": "G2",
+    "name": "장면과 생각 표현",
+    "group": "갈래",
+    "levels": [
+      "장면이나 나의 생각·느낌이 드러나지 않는다.",
+      "일을 나열하고 좋았다·슬펐다는 느낌만 덧붙인다.",
+      "행동·대화·주변 모습으로 장면을 보여 주고 그때의 생각·느낌을 쓴다.",
+      "구체적인 장면과 생각의 변화를 연결하여 경험이 나에게 준 의미를 드러낸다."
+    ]
+  },
+  {
+    "genre": "report",
+    "band": "5-6",
+    "id": "G1",
+    "name": "탐구 과정과 기록",
+    "group": "갈래",
+    "levels": [
+      "무엇을 알아보았는지 알기 어렵다.",
+      "관찰·탐구 대상은 있지만 방법이나 기록이 부족하다.",
+      "알아볼 내용과 관찰·조사 방법을 밝히고 결과를 구체적으로 기록한다.",
+      "질문에 맞는 방법과 조건을 설명하고 관찰·조사 자료를 빠짐없이 체계적으로 정리한다."
+    ]
+  },
+  {
+    "genre": "report",
+    "band": "5-6",
+    "id": "G2",
+    "name": "근거에 따른 해석",
+    "group": "갈래",
+    "levels": [
+      "결과에 대한 설명이 없거나 기록과 관계없다.",
+      "알게 된 점은 있지만 어떤 기록을 근거로 했는지 불분명하다.",
+      "관찰·조사한 사실과 나의 생각을 구분하고 기록을 근거로 알게 된 점을 설명한다.",
+      "여러 자료를 비교해 결론을 내리고 한계나 더 알아볼 질문을 제시한다."
+    ]
+  },
+  {
+    "genre": "letter",
+    "band": "5-6",
+    "id": "G1",
+    "name": "받는 사람과 목적",
+    "group": "갈래",
+    "levels": [
+      "누구에게 왜 쓰는지 알기 어렵다.",
+      "받는 사람은 알 수 있지만 전하려는 말이 흐릿하다.",
+      "받는 사람에게 전하고 싶은 말과 그 까닭이 분명하다.",
+      "받는 사람의 상황과 관계를 고려해 필요한 내용을 구체적으로 골라 목적에 맞게 전한다."
+    ]
+  },
+  {
+    "genre": "letter",
+    "band": "5-6",
+    "id": "G2",
+    "name": "상대에 맞는 표현과 형식",
+    "group": "갈래",
+    "levels": [
+      "편지의 기본 형식이나 상대에 맞는 표현이 거의 없다.",
+      "인사나 끝맺음은 있지만 빠진 요소가 있거나 말투가 일정하지 않다.",
+      "받는 사람·인사·전할 말·끝인사·보내는 사람이 드러나며 관계에 맞는 말투를 쓴다.",
+      "편지 형식이 갖춰지고 상대의 입장을 배려한 구체적인 표현과 자연스러운 끝맺음을 쓴다."
+    ]
+  }
+]);
 
 // ─────────────────────────────────────────────
 // 시트 정의
@@ -404,7 +672,7 @@ function doPost(e) {
 function route_(action, body) {
   switch (action) {
     // 공개
-    case 'ping':                 return ok_({ app: APP_NAME, version: APP_VERSION, protocol: 2, genres: GENRES, bands: BANDS });
+    case 'ping':                 return ok_({ app: APP_NAME, version: APP_VERSION, protocol: 2, capabilities: ['taskTrash', 'expandedRubrics'], genres: GENRES, bands: BANDS });
     case 'student.join':         return studentJoin_(body);
     case 'task.listForStudent':  return taskListForStudent_(body);
     case 'submission.mine':      return submissionMine_(body);
@@ -422,7 +690,9 @@ function route_(action, body) {
     case 'student.list':         requireTeacher_(body); return ok_({ students: listStudents_(body.classId) });
     case 'student.set':          requireTeacher_(body); return studentSet_(body);
     case 'rubric.defaults':      requireTeacher_(body); return rubricDefaults_(body);
-    case 'task.list':            requireTeacher_(body); return ok_({ tasks: listTasks_(body.classId, false) });
+    case 'task.trash':           requireTeacher_(body); return taskTrash_(body, false);
+    case 'task.restore':         requireTeacher_(body); return taskTrash_(body, true);
+    case 'task.list':            requireTeacher_(body); return ok_({ tasks: listTasks_(body.classId, false, body.trash === true) });
     case 'task.get':             requireTeacher_(body); return taskGet_(body);
     case 'task.create':          requireTeacher_(body); return taskCreate_(body);
     case 'task.update':          requireTeacher_(body); return taskUpdate_(body);
@@ -541,7 +811,7 @@ function teacherStatus_() {
 function listClasses_() {
   var classes = readTable_(SHEETS.classes);
   var students = readTable_(SHEETS.students);
-  var tasks = readTable_(SHEETS.tasks);
+  var tasks = readTable_(SHEETS.tasks).filter(function (t) { return t['상태'] !== '삭제됨'; });
   var counts = {};
   students.forEach(function (s) { counts[s['학급ID']] = (counts[s['학급ID']] || 0) + 1; });
   var taskCounts = {};
@@ -737,6 +1007,10 @@ function loadRubrics_(genreKey, band) {
 
   var common = source.filter(function (r) { return r.genre === '공통' && r.band === band; });
   var genre  = source.filter(function (r) { return r.genre === genreKey && r.band === band; });
+  if (!common.length) common = DEFAULT_RUBRICS.filter(function (r) { return r.genre === '공통' && r.band === band; });
+  if (!genre.length) genre = DEFAULT_RUBRICS.filter(function (r) { return r.genre === genreKey && r.band === band; });
+  // 성찰은 일반적인 설명문 짜임 대신 경험·배움·과정·실천을 평가합니다.
+  if (genreKey === 'reflect') common = common.filter(function (r) { return r.id === 'C3' || r.id === 'C4'; });
   return common.concat(genre).map(function (r) {
     return { id: r.id, name: r.name, group: r.group, levels: r.levels.slice() };
   });
@@ -799,12 +1073,12 @@ function taskRowToObj_(t) {
   };
 }
 
-function listTasks_(classId, openOnly) {
+function listTasks_(classId, openOnly, trash) {
   classId = String(classId || '');
   var tasks = readTable_(SHEETS.tasks)
     .filter(function (t) { return String(t['학급ID']) === classId; })
     .map(taskRowToObj_)
-    .filter(function (t) { return !openOnly || t.status === '열림'; })
+    .filter(function (t) { return openOnly ? t.status === '열림' : (trash ? t.status === '삭제됨' : t.status !== '삭제됨'); })
     .reverse();
   if (!openOnly) {
     // 교사용: 과제별 제출/작성 중 학생 수 (학생 한 명은 한 번만 셈)
@@ -834,7 +1108,7 @@ function taskGet_(body) {
   var taskId = String(body.taskId || '');
   var found = null;
   readTable_(SHEETS.tasks).forEach(function (t) { if (String(t['과제ID']) === taskId) found = t; });
-  if (!found) return fail_('과제를 찾을 수 없습니다.');
+  if (!found || found['상태'] === '삭제됨') return fail_('과제를 찾을 수 없습니다.');
   return ok_({ task: taskRowToObj_(found) });
 }
 
@@ -903,6 +1177,7 @@ function taskUpdate_(body) {
     var ids = sh.getRange(2, 1, last - 1, 1).getValues();
     for (var i = 0; i < ids.length; i++) {
       if (String(ids[i][0]) === taskId) {
+        if (sh.getRange(i + 2, 11).getValue() === '삭제됨') return fail_('휴지통에서 먼저 복원해 주세요.');
         // 제목(3)~기준(10) 갱신, 상태·만든날짜는 유지
         sh.getRange(i + 2, 3, 1, 8).setValues([[
           v.title, v.genre, v.prompt, v.band, v.minChars, v.maxChars, v.requiredWords.join(', '), JSON.stringify(v.criteria)
@@ -918,20 +1193,30 @@ function taskUpdate_(body) {
 }
 
 function taskSetStatus_(body) {
-  var taskId = String(body.taskId || '');
   var status = String(body.status || '');
   if (TASK_STATUSES.indexOf(status) < 0) return fail_('상태는 열림 또는 닫힘만 가능합니다.');
-  var sh = sheet_(SHEETS.tasks);
-  var last = sh.getLastRow();
-  if (last < 2) return fail_('과제를 찾을 수 없습니다.');
-  var ids = sh.getRange(2, 1, last - 1, 1).getValues();
-  for (var i = 0; i < ids.length; i++) {
-    if (String(ids[i][0]) === taskId) {
-      sh.getRange(i + 2, 11).setValue(status);
-      return ok_({ taskId: taskId, status: status });
-    }
-  }
-  return fail_('과제를 찾을 수 없습니다.');
+  var lock = LockService.getScriptLock(); lock.waitLock(10000);
+  try {
+    var row = findRow_(SHEETS.tasks, 1, String(body.taskId || ''));
+    if (row < 0) return fail_('과제를 찾을 수 없습니다.');
+    var cell = sheet_(SHEETS.tasks).getRange(row, 11);
+    if (cell.getValue() === '삭제됨') return fail_('휴지통에서 먼저 복원해 주세요.');
+    cell.setValue(status);
+    return ok_({ taskId: body.taskId, status: status });
+  } finally { releaseLock_(lock); }
+}
+
+// 실제 행을 지우지 않아 학생 글과 피드백을 그대로 복원할 수 있습니다.
+function taskTrash_(body, restore) {
+  var lock = LockService.getScriptLock(); lock.waitLock(10000);
+  try {
+    var row = findRow_(SHEETS.tasks, 1, String(body.taskId || ''));
+    if (row < 0) return fail_('과제를 찾을 수 없습니다.');
+    var cell = sheet_(SHEETS.tasks).getRange(row, 11);
+    if (restore && cell.getValue() !== '삭제됨') return fail_('휴지통에 있는 과제만 복원할 수 있어요.');
+    cell.setValue(restore ? '닫힘' : '삭제됨');
+    return ok_({ taskId: body.taskId, status: restore ? '닫힘' : '삭제됨' });
+  } finally { releaseLock_(lock); }
 }
 
 // 학생용: 학급 코드 + 학급ID가 맞을 때만 열린 과제를 돌려줍니다 (기준은 이름만)
@@ -976,7 +1261,7 @@ function findTask_(taskId) {
   taskId = String(taskId || '');
   var found = null;
   readTable_(SHEETS.tasks).forEach(function (t) { if (String(t['과제ID']) === taskId) found = t; });
-  return found ? taskRowToObj_(found) : null;
+  return found && found['상태'] !== '삭제됨' ? taskRowToObj_(found) : null;
 }
 
 function subRowToObj_(s) {
@@ -1067,6 +1352,8 @@ function submissionSaveDraft_(body) {
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
+    task = findTask_(body.taskId);
+    if (!task || task.status !== '열림') return fail_('닫혔거나 삭제된 과제예요. 선생님께 확인해 주세요.');
     ensureHeaders_(sheet_(SHEETS.submissions), HEADERS[SHEETS.submissions]);
     var sum = subSummary_(studentSubs_(task.taskId, v.no), task.maxRounds);
     if (Number(body.round) !== sum.nextRound || Number(body.revision) !== (sum.draft ? sum.draft.revision : 0)) return fail_('다른 창에서 글이 바뀌었어요. 이 기기의 글을 복사한 뒤 새로고침해 주세요.');
@@ -1107,6 +1394,8 @@ function submissionSubmit_(body) {
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
   try {
+    task = findTask_(body.taskId);
+    if (!task || task.status !== '열림') return fail_('닫혔거나 삭제된 과제예요. 선생님께 확인해 주세요.');
     ensureHeaders_(sheet_(SHEETS.submissions), HEADERS[SHEETS.submissions]);
     var sum = subSummary_(studentSubs_(task.taskId, v.no), task.maxRounds);
     if (Number(body.round) !== sum.nextRound || Number(body.revision) !== (sum.draft ? sum.draft.revision : 0)) return fail_('다른 창에서 글이 바뀌었어요. 이 기기의 글을 복사한 뒤 새로고침해 주세요.');
@@ -1145,6 +1434,7 @@ function feedbackRequest_(body) {
   var id = String(body.submissionId || '');
   var sub = findSubmission_(id);
   if (!sub || sub.no !== v.no || sub.classId !== String(v.cls['학급ID'])) return fail_('제출글을 찾을 수 없어요.');
+  if (!findTask_(sub.taskId)) return fail_('삭제된 과제예요. 선생님께 확인해 주세요.');
   if (sub.status === SUB_STATUS.draft) return fail_('먼저 제출해 주세요.');
   var existing = feedbackMap_([id])[id];
   if (existing) return ok_({ submissionId: id, feedback: existing, feedbackError: null });
@@ -1285,6 +1575,10 @@ var GENRE_GUIDE = {
     '- 작품 제목·인물 이름을 밝혔는지 확인하세요.'
   ].join('\n')
 };
+GENRE_GUIDE.reflect = '- 활동을 요약한 분량보다 경험의 근거, 배움과 생각의 변화, 자기 과정 분석, 다음 실천을 평가하세요.\n- 반성이나 부정적인 감정, 잘못 고백을 강요하지 마세요. 긍정·부정 감정의 종류나 교사가 원하는 결론으로 점수를 정하지 마세요.\n- 실제로 한 행동·관찰·기록과 연결된 성찰인지 확인하고, 막연한 다짐은 구체적인 실천으로 바꾸도록 도우세요.';
+GENRE_GUIDE.experience = '- 사건의 순서와 핵심 장면을 확인하세요. 행동·대화·감각 표현과 당시 생각이 경험의 의미를 드러내는지 보세요. 경험이 특별하거나 극적이라는 이유로 높은 단계를 주지 마세요.';
+GENRE_GUIDE.report = '- 알아볼 질문, 관찰·조사 방법, 결과, 해석을 구분하세요. 글에 없는 수치나 실험 결과를 만들어 넣지 마세요. 사실 기록과 추측을 구분하고 근거의 한계를 인정하는 표현을 존중하세요.';
+GENRE_GUIDE.letter = '- 받는 사람과 쓰는 목적, 전할 말의 구체성, 관계에 맞는 말투와 편지 형식을 평가하세요. 친한 친구에게 쓰는 자연스러운 반말을 오류로 보지 마세요.';
 var GEN_MAX_TOKENS = 8192;      // 한국어 피드백(기준 6개 + 고칠 곳)이 넉넉히 들어가도록
 var GEN_TEMPERATURE = 0.2;      // 일관성 우선
 

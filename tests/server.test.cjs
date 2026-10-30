@@ -60,3 +60,34 @@ test('regenerate preserves teacher note and final level',()=>{const f=fixture();
 test('invented evidence/corrections rejected; teacher level is growth baseline',()=>{const f=fixture(),task=f.c.findTask_('T1');const raw=f.raw();raw.criteria[0].evidence='없는 문장';raw.corrections=[{original:'없는 표현',fixed:'수정'},{original:'나무',fixed:'큰 나무'}];raw.growth=[{id:'C1',before:1,after:3,comment:'변화'}];const fb=f.c.normalizeFeedback_(raw,task,{text:f.base.text,name:'가상학생'},true,{criteria:[{id:'C1',level:1}],finalLevels:{C1:4}});assert.equal(fb.criteria[0].evidence,'');assert.equal(fb.corrections.length,1);assert.equal(fb.growth.items[0].before,4)});
 test('AI prompt minimizes names and common identifiers and uses final levels',()=>{const f=fixture();const p=f.c.buildFeedbackPrompt_(f.c.findTask_('T1'),{name:'가상학생',round:2,text:'가상학생 010-1234-5678 test@example.com'}, {'학년':3},{round:1,text:'이전 글'},{criteria:[{id:'C1',name:'내용',level:1,tip:'연습'}],finalLevels:{C1:4}});assert.ok(!p.user.includes('가상학생'));assert.ok(!p.user.includes('010-1234-5678'));assert.ok(!p.user.includes('test@example.com'));assert.ok(p.user.includes('4단계'))});
 test('student tasks expose progress and finished rounds',()=>{const f=fixture();assert.equal(f.request('task.listForStudent',{token:f.student}).data.tasks[0].progress,'시작 전');f.request('submission.saveDraft',f.base);assert.equal(f.request('task.listForStudent',{token:f.student}).data.tasks[0].progress,'작성 중')});
+
+test('only teacher can trash and restore tasks',()=>{const f=fixture();for(const action of ['task.trash','task.restore'])assert.throws(()=>f.request(action,{token:f.student,taskId:'T1'}),/인증/)});
+test('trash hides tasks and blocks student access without deleting essays or feedback; restore is closed',()=>{
+ const f=fixture(); const id=f.request('submission.submit',f.base).data.submissionId;
+ const records=JSON.stringify([f.sheets['제출글'],f.sheets['피드백']]);
+ assert.equal(f.request('task.trash',{token:f.teacher,taskId:'T1'}).ok,true);
+ assert.equal(f.request('task.list',{token:f.teacher,classId:'C1'}).data.tasks.length,0);
+ assert.equal(f.request('task.list',{token:f.teacher,classId:'C1',trash:true}).data.tasks.length,1);
+ assert.equal(f.request('task.listForStudent',{token:f.student}).data.tasks.length,0);
+ for(const action of ['submission.mine','submission.saveDraft','submission.submit'])assert.equal(f.request(action,f.base).ok,false);
+ assert.equal(f.request('feedback.request',{token:f.student,submissionId:id}).ok,false);
+ assert.equal(f.request('task.setStatus',{token:f.teacher,taskId:'T1',status:'열림'}).ok,false);
+ assert.equal(f.request('task.restore',{token:f.teacher,taskId:'T1'}).data.status,'닫힘');
+ assert.equal(JSON.stringify([f.sheets['제출글'],f.sheets['피드백']]),records);
+ assert.equal(f.request('task.setStatus',{token:f.teacher,taskId:'T1',status:'열림'}).ok,true);
+ assert.equal(f.request('submission.mine',f.base).data.submitted[0].feedback.criteria[0].level,3);
+});
+test('trash while AI is running discards result',()=>{const f=fixture();f.c.callGemini_=()=>{f.request('task.trash',{token:f.teacher,taskId:'T1'});return f.raw()};assert.match(f.request('submission.submit',f.base).data.feedbackError,/변경/);assert.equal(f.sheets['피드백'].length,1)});
+test('new genre rubrics fall back safely alongside customized old rubric sheet',()=>{
+ const f=fixture();f.sheets['루브릭'].push(['공통','3-4','C3','우리반 표현','공통','a','b','c','d']);
+ const before=JSON.stringify(f.sheets['루브릭']);
+ for(const genre of ['reflect','experience','report','letter'])for(const band of ['3-4','5-6']){
+  const r=f.request('rubric.defaults',{token:f.teacher,genre,band});assert.equal(r.ok,true);
+  assert.ok(r.data.criteria.length>=3);assert.equal(new Set(r.data.criteria.map(c=>c.id)).size,r.data.criteria.length);
+  for(const c of r.data.criteria){assert.equal(c.levels.length,4);assert.ok(c.levels.every(Boolean))}
+ }
+ const reflect=f.request('rubric.defaults',{token:f.teacher,genre:'reflect',band:'3-4'}).data.criteria;
+ assert.ok(reflect.some(c=>c.name==='우리반 표현'));assert.ok(reflect.some(c=>c.id==='R4'));assert.ok(!reflect.some(c=>c.id==='C2'));
+ assert.equal(JSON.stringify(f.sheets['루브릭']),before);
+ assert.match(f.c.GENRE_GUIDE.reflect,/강요하지/);
+});

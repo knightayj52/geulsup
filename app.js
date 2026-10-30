@@ -28,8 +28,8 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '0.6.1'; // server protocol version
-  var UI_VERSION = '0.6.3';
+  var APP_VERSION = '0.7.0'; // server protocol version
+  var UI_VERSION = '0.7.0';
   var editorLifecycle = null;
   var submissionNavigation = [];
   var teacherNoteCleanup = null;
@@ -47,7 +47,11 @@
     explain: '예: 우리 학교의 자랑거리 한 가지를 골라, 처음 듣는 친구도 알 수 있게 설명해 보세요.',
     argue:   '예: "쉬는 시간을 20분으로 늘려야 한다"에 찬성 또는 반대하는 글을 쓰세요. 까닭을 두 가지 이상 드세요.',
     propose: '예: 우리 반에서 고치고 싶은 문제 하나를 골라, 누가 무엇을 어떻게 하면 좋을지 제안해 보세요.',
-    review:  '예: 최근에 읽은 책에서 가장 인상 깊은 장면을 고르고, 왜 그렇게 느꼈는지 쓰세요.'
+    review:  '예: 최근에 읽은 책에서 가장 인상 깊은 장면을 고르고, 왜 그렇게 느꼈는지 쓰세요.',
+    reflect: '활동에서 내가 한 일과 기억에 남는 장면을 쓰세요. 그 경험으로 새롭게 배운 점이나 달라진 생각, 잘된 방법과 어려웠던 점을 돌아보고 다음에 할 구체적인 행동을 적어 보세요.',
+    experience: '기억에 남는 경험 하나를 골라 일이 일어난 순서와 중요한 장면을 쓰세요. 그때의 생각과 느낌, 나에게 어떤 의미가 있었는지도 담아 보세요.',
+    report: '무엇을 알아보려 했나요? 관찰·조사한 방법과 결과를 쓰고, 기록을 근거로 알게 된 점과 더 궁금한 점을 설명해 보세요.',
+    letter: '누구에게 어떤 말을 전하고 싶은가요? 인사, 전하고 싶은 말과 까닭, 끝인사와 보내는 사람을 담아 편지를 써 보세요.'
   };
   function genreLabel(key) { for (var i = 0; i < GENRES.length; i++) if (GENRES[i].key === key) return GENRES[i].label; return key; }
   function bandLabel(key) { for (var i = 0; i < BANDS.length; i++) if (BANDS[i].key === key) return BANDS[i].label; return key; }
@@ -137,6 +141,7 @@
     function link(href, text, glyph, active) { nav.appendChild(h('a', { href: href, class: 'nav-link' + (active ? ' active' : ''), 'aria-current': active ? 'page' : null }, [icon(glyph), h('span', { text: text })])); }
     link('#/teacher/classes', '대시보드', 'grid', path === '/teacher/classes');
     link('#/teacher/new', '새 학급 만들기', 'people', path === '/teacher/new');
+    link('#/teacher/setup', '스프레드시트 연결·설정', 'settings', path === '/teacher/setup');
     var match = path.match(/^\/teacher\/class\/([^/]+)/);
     if (match) {
       nav.appendChild(h('div', { class: 'nav-caption section-caption', text: '선택한 학급' }));
@@ -264,6 +269,7 @@
     renderTopbar(path);
     renderStudioNavigation(path);
     if (path === '/' || path === '') return viewHome();
+    if (path === '/teacher/setup') return viewTeacher(true);
     if (path === '/teacher') return viewTeacher();
     if (path === '/teacher/classes') return viewClasses();
     if (path === '/teacher/new') return viewClassForm(null);
@@ -730,12 +736,26 @@
   // ───────────────────────────────────────────
   // 교사: 설정 + 로그인
   // ───────────────────────────────────────────
-  function viewTeacher() {
+  function buildServerUpdateGuide() {
+    var text = h('textarea', { readonly: true, 'aria-label': '최신 Code.gs 전체 코드', hidden: true });
+    var copyAll = h('button', { class: 'small', text: '전체 코드 복사', hidden: true, onclick: function () { text.focus(); text.select(); copyText(text.value); } });
+    var status = h('p', { class: 'hint', text: '과제 휴지통·새 글 종류를 사용하려면 Code.gs 0.7.0이 필요합니다. 기존 학급과 학생 글은 유지됩니다.' });
+    var copy = h('button', { class: 'secondary', text: '최신 Code.gs 불러오기', onclick: function () {
+      setBusy(copy, true);
+      fetch('server/Code.gs?v=0.7.0').then(function (r) { if (!r.ok) throw new Error('코드를 불러오지 못했어요.'); return r.text(); })
+        .then(function (code) { text.value = code; text.hidden = false; copyAll.hidden = false; text.focus(); text.select(); text.scrollTop = 0; status.textContent = '아래 전체 코드를 복사해 Apps Script의 Code.gs 전체와 교체하세요. 학생 데이터는 이 코드에 들어 있지 않습니다.'; })
+        .catch(function (e) { status.textContent = e.message; }).finally(function () { setBusy(copy, false); });
+    } });
+    return h('div', { class: 'card server-upgrade' }, [h('h2', { text: '최신 코드 · 기존 사용자 업데이트' }), status, copy, copyAll, text,
+      h('p', { class: 'hint', text: '코드 교체 후: 배포 → 배포 관리 → 기존 웹 앱 편집 → 새 버전 → 배포. 기존 주소를 유지하세요. 루브릭 초기화는 필요 없습니다.' })]);
+  }
+
+  function viewTeacher(setupMode) {
     var apiId = lsGet(KEYS.apiId, '');
-    if (apiId && ssGet(KEYS.teacherToken)) { go('/teacher/classes'); return; }
+    if (!setupMode && apiId && ssGet(KEYS.teacherToken)) { go('/teacher/classes'); return; }
 
     // 1) 서버 연결
-    var inUrl = h('input', { type: 'url', placeholder: 'https://script.google.com/macros/s/AKfy…/exec', value: apiId ? apiUrl(apiId) : '' });
+    var inUrl = h('input', { type: 'url', 'aria-label': '웹 앱 URL', placeholder: 'https://script.google.com/macros/s/AKfy…/exec', value: apiId ? apiUrl(apiId) : '' });
     var btnTest = h('button', { text: '연결 테스트', class: 'fit' });
     var connStatus = h('div', { class: 'hint', text: apiId ? '등록된 서버가 있어요. 바꾸려면 새 URL을 넣고 테스트하세요.' : '' });
 
@@ -750,6 +770,7 @@
           lsSet(KEYS.apiId, id);
           connStatus.textContent = '✅ 연결 성공 — ' + d.app + ' 서버 v' + d.version;
           connStatus.className = 'hint ok';
+          continueLink.hidden = false;
           toast('서버와 연결됐어요!');
         })
         .catch(function (e) {
@@ -782,7 +803,8 @@
       h('h2', { text: '처음 설정하기' }),
       h('p', { class: 'desc', text: '글숲은 선생님의 구글 스프레드시트가 서버가 되어요. 한 번만 해 두면 됩니다.' }),
       h('ol', { class: 'steps' }, [
-        h('li', { html: '글숲 <b>스프레드시트 사본</b>을 내 드라이브에 만듭니다.' }),
+        h('li', {}, [h('a', { href: 'https://docs.google.com/spreadsheets/d/1Lu4S_JjXPmMzcncrJY_wyW1x4lk0m_Qjj4-nXnhX7vQ/copy', target: '_blank', rel: 'noopener noreferrer', class: 'btn', text: '내 글숲 스프레드시트 만들기 ↗' }), h('p', { class: 'hint', text: '사용할 구글 계정으로 로그인한 뒤 사본을 만드세요. 이미 운영 중이면 새 사본을 만들 필요가 없습니다.' })]),
+        h('li', { text: '사본의 확장 프로그램 → Apps Script에서 아래 최신 Code.gs를 복사해 기존 코드를 교체·저장합니다. 템플릿의 코드가 최신이라면 생략할 수 있습니다.' }),
         h('li', { html: '시트 메뉴 <b>🌳 글숲 → 시트 초기화</b>를 실행합니다.' }),
         h('li', { html: '<b>설정</b> 시트의 노란 칸에 Gemini API 키와 교사 비밀번호를 적습니다.' }),
         h('li', { html: '확장 프로그램 → Apps Script → <b>배포 → 새 배포 → 웹 앱</b> (실행: 나 / 액세스: <b>모든 사용자</b>)' }),
@@ -791,11 +813,14 @@
     ]);
 
     var connect = h('div', { class: 'card' }, [
-      h('h2', { text: '1. 서버 연결' }),
+      h('h2', { text: '마지막 단계 · 내 스프레드시트 연결' }),
+      h('p', { class: 'desc', text: '스프레드시트 주소가 아니라 Apps Script에서 배포한 웹 앱 주소(끝이 /exec)를 넣어 주세요.' }),
       h('label', { text: '웹 앱 URL' }),
       h('div', { class: 'row' }, [inUrl, btnTest]),
       connStatus
     ]);
+    var continueLink = h('a', { href: '#/teacher', class: 'btn', text: '연결 완료 · 교사 로그인으로', hidden: !apiId });
+    connect.appendChild(continueLink);
 
     var loginCard = h('div', { class: 'card' }, [
       h('h2', { text: '선생님, 어서 오세요' }),
@@ -804,10 +829,20 @@
       h('p', { class: 'hint', text: '로그인은 최대 6시간 유지돼요. 사용을 마치면 로그아웃해 주세요. 학생이 쓰는 기기에서는 로그인하지 마세요.' })
     ]);
 
-    var help = h('details', { class: 'setup-guide' }, [h('summary', { text: '처음 연결하시나요? 설정 안내 보기' }), guide, connect]);
-    if (!apiId) help.open = true;
+    var updateBox = buildServerUpdateGuide();
+    if (setupMode) {
+      render(sectionHeading('START HERE', '스프레드시트 연결·설정', '처음에는 사본을 만들고, 이미 쓰고 있다면 웹 앱 주소만 연결하세요.'),
+        h('div', { class: 'setup-layout' }, [guide, h('div', {}, [updateBox, connect])]),
+        h('a', { href: ssGet(KEYS.teacherToken) ? '#/teacher/classes' : '#/teacher', class: 'btn ghost', text: '← 교사 화면으로' }));
+      return;
+    }
     loginCard.classList.add('entry-card'); loginCard.prepend(h('div', { class: 'eyebrow', text: 'TEACHER ACCESS' }));
-    render(h('div', { class: 'entry-layout teacher-entry' }, [studioIntro(true), h('div', {}, [loginCard, help])]));
+    var start = h('div', { class: 'card setup-entry' }, [
+      h('h2', { text: apiId ? '연결할 스프레드시트를 바꾸시나요?' : '처음 사용하는 선생님이신가요?' }),
+      h('p', { text: '사본 만들기부터 웹 앱 주소 연결까지 여기서 시작하세요.' }),
+      h('a', { href: '#/teacher/setup', class: 'btn big', text: '스프레드시트 연결·설정' })
+    ]);
+    render(h('div', { class: 'entry-layout teacher-entry' }, [studioIntro(true), h('div', {}, apiId ? [loginCard, start] : [start, loginCard])]));
   }
 
   // ───────────────────────────────────────────
@@ -831,7 +866,7 @@
       h('h2', { text: '서버 상태' }),
       statusBox,
       h('div', { class: 'actions' }, [
-        h('button', { class: 'ghost small', text: '서버 설정 바꾸기', onclick: function () { ssDel(KEYS.teacherToken); go('/teacher'); } })
+        h('a', { href: '#/teacher/setup', class: 'btn ghost small', text: '스프레드시트 연결·설정' })
       ])
     ]);
 
@@ -869,11 +904,11 @@
     statusBox.appendChild(versionLine);
     api('ping').then(function (d) {
       var sv = String(d.version || '?');
-      if (sv !== APP_VERSION) {
+      if (!(d.capabilities || []).includes('expandedRubrics')) {
         versionLine.style.display = '';
         versionLine.appendChild(h('span', { class: 'bad', text: '⚠️' }));
         versionLine.appendChild(h('span', {}, [
-          ' 서버 v' + sv + ' / 화면 v' + APP_VERSION + ' — 버전이 달라요. Apps Script에서 Code.gs를 교체한 뒤 ',
+          ' 서버 v' + sv + ' — 새 루브릭·과제 삭제를 사용하려면 연결·설정에서 Code.gs를 교체한 뒤 ',
           h('b', { text: '배포 관리 → 편집 → 새 버전 → 배포' }),
           '를 해 주세요.'
         ]));
@@ -1070,33 +1105,43 @@
     });
   }
 
-  function viewTasks(classId) {
+  function viewTasks(classId, trash) {
     if (!ssGet(KEYS.teacherToken)) { go('/teacher'); return; }
     var list = h('div', { class: 'task-list' }, [h('div', { class: 'loading', text: '과제를 불러오는 중…' })]);
     var title = h('h2', { text: '과제' });
+    var trashToggle = h('button', { class: 'secondary small', text: trash ? '← 과제 목록' : '과제 휴지통', hidden: true, onclick: function () { viewTasks(classId, !trash); } });
+    var upgradeNotice = h('p', { class: 'hint' });
     var desc = h('p', { class: 'desc', text: '' });
     var card = h('div', { class: 'card' }, [
       h('div', { class: 'row' }, [
         h('div', {}, [title, desc]),
         h('a', { href: '#/teacher/class/' + classId + '/tasks/new', class: 'btn fit', text: '+ 새 과제' })
       ]),
-      list,
+      h('div', { class: 'actions' }, [trashToggle, upgradeNotice]), list,
       h('div', { class: 'actions' }, [h('a', { href: '#/teacher/classes', class: 'btn ghost small', text: '← 학급 목록' })])
     ]);
     render(card);
 
-    Promise.all([getClass(classId), teacherApi('task.list', { classId: classId })])
+    Promise.all([getClass(classId), teacherApi('task.list', { classId: classId, trash: !!trash }), api('ping')])
       .then(function (res) {
         var cls = res[0];
         var tasks = res[1].tasks;
-        title.textContent = cls.name + ' · 과제';
+        var canTrash = (res[2].capabilities || []).indexOf('taskTrash') >= 0;
+        trashToggle.hidden = !canTrash;
+        if (!canTrash) upgradeNotice.append('과제 삭제·새 루브릭은 서버 업데이트 후 사용할 수 있어요. ', h('a', { href: '#/teacher/setup', text: '연결·설정 열기' }));
+        title.textContent = cls.name + (trash ? ' · 과제 휴지통' : ' · 과제');
         desc.textContent = cls.grade + '학년 · 학생 ' + cls.studentCount + '명 · 열린 과제는 학생 화면에 바로 보여요.';
         clear(list);
         if (!tasks.length) {
-          list.appendChild(h('div', { class: 'empty' }, [h('span', { class: 'big-emoji', text: '✏️' }), '아직 과제가 없어요. 첫 과제를 만들어 보세요!']));
+          list.appendChild(h('div', { class: 'empty' }, [h('span', { class: 'big-emoji', text: '✏️' }), trash ? '휴지통이 비어 있어요.' : '아직 과제가 없어요. 첫 과제를 만들어 보세요!']));
           return;
         }
         tasks.forEach(function (t) {
+          if (trash) {
+            list.appendChild(h('div', { class: 'task-item teacher' }, [h('div', {}, [h('div', { class: 'task-title', text: t.title }), h('p', { class: 'hint', text: '학생 글과 피드백을 보관 중입니다. 복원하면 닫힌 과제로 돌아갑니다.' })]),
+              h('button', { class: 'small secondary', text: '복원', onclick: function (ev) { var btn = ev.currentTarget; setBusy(btn, true); teacherApi('task.restore', { taskId: t.taskId }).then(function () { toast('닫힌 과제로 복원했어요.'); viewTasks(classId, true); }).catch(function (e) { toast(e.message, true); setBusy(btn, false); }); } })]));
+            return;
+          }
           var closed = t.status !== '열림';
           var item = h('div', { class: 'task-item teacher' + (closed ? ' closed' : '') }, [
             h('div', {}, [
@@ -1116,6 +1161,11 @@
               } })
             ])
           ]);
+          if (canTrash) item.querySelector('.btns').appendChild(h('button', { class: 'small ghost danger', text: '삭제', onclick: function (ev) {
+            if (!confirm('“' + t.title + '” 과제를 휴지통으로 옮길까요? 학생 화면에서 숨겨지고 작성·제출할 수 없게 됩니다. 학생 글과 피드백은 보관되며 복원할 수 있습니다.')) return;
+            var btn = ev.currentTarget; setBusy(btn, true);
+            teacherApi('task.trash', { taskId: t.taskId }).then(function () { toast('휴지통으로 옮겼어요.'); viewTasks(classId); }).catch(function (e) { toast(e.message, true); setBusy(btn, false); });
+          } }));
           list.appendChild(item);
         });
       })
@@ -1130,10 +1180,11 @@
     if (!ssGet(KEYS.teacherToken)) { go('/teacher'); return; }
     render(h('div', { class: 'card' }, [h('div', { class: 'loading', text: '불러오는 중…' })]));
 
-    var loads = [getClass(classId)];
+    var loads = [getClass(classId), api('ping')];
     if (taskId) loads.push(teacherApi('task.get', { taskId: taskId }));
     Promise.all(loads).then(function (res) { if (viewTicket !== routeVersion) return;
-      buildTaskForm(res[0], res[1] ? res[1].task : null);
+      if (res[1].genres && res[1].genres.length) GENRES = res[1].genres;
+      buildTaskForm(res[0], res[2] ? res[2].task : null);
     }).catch(function (e) { if (viewTicket !== routeVersion) return;
       render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/teacher/class/' + classId + '/tasks', class: 'btn ghost small', text: '← 과제 목록' })]));
     });
@@ -1148,14 +1199,15 @@
 
     // ── 기본 정보 ──
     var inTitle = h('input', { type: 'text', placeholder: '예: 우리 학교 자랑거리 설명하기', value: existing ? existing.title : '' });
-    var selGenre = h('select', {}, [h('option', { value: '', text: '갈래를 고르세요' })].concat(GENRES.map(function (g) {
+    var selGenre = h('select', { 'aria-label': '글 종류' }, [h('option', { value: '', text: '갈래를 고르세요' })].concat(GENRES.map(function (g) {
       return h('option', { value: g.key, text: g.label });
     })));
     if (existing) selGenre.value = existing.genre;
     var selBand = h('select', {}, BANDS.map(function (b) { return h('option', { value: b.key, text: b.label + ' 기준' }); }));
     selBand.value = existing ? existing.band : bandForGrade(cls.grade);
-    var inPrompt = h('textarea', { placeholder: GENRE_HINTS[selGenre.value] || '학생에게 보여 줄 글감·안내를 적어 주세요.' });
+    var inPrompt = h('textarea', { 'aria-label': '글감·안내', placeholder: GENRE_HINTS[selGenre.value] || '학생에게 보여 줄 글감·안내를 적어 주세요.' });
     if (existing) inPrompt.value = existing.prompt;
+    var promptButton = h('button', { class: 'small secondary', text: '선택한 글 종류의 안내 예시 넣기', onclick: function () { if (!selGenre.value) return toast('글 종류를 먼저 고르세요.', true); if (inPrompt.value.trim() && !confirm('현재 글감·안내를 예시로 바꿀까요?')) return; inPrompt.value = GENRE_HINTS[selGenre.value] || ''; } });
     var inMin = h('input', { type: 'text', inputmode: 'numeric', placeholder: '예: 300', value: existing && existing.minChars ? String(existing.minChars) : '' });
     var inMax = h('input', { type: 'text', inputmode: 'numeric', placeholder: '예: 800', value: existing && existing.maxChars ? String(existing.maxChars) : '' });
     var inWords = h('input', { type: 'text', placeholder: '예: 까닭, 예를 들어 (쉼표로 구분)', value: existing ? existing.requiredWords.join(', ') : '' });
@@ -1320,7 +1372,7 @@
         h('div', {}, [h('label', { text: '갈래' }), selGenre]),
         h('div', { class: 'fit', style: 'min-width:150px' }, [h('label', { text: '기준 학년군' }), selBand])
       ]),
-      h('label', { text: '글감 · 안내 (학생에게 그대로 보여요)' }), inPrompt,
+      h('label', { text: '글감 · 안내 (학생에게 그대로 보여요)' }), inPrompt, promptButton,
       h('div', { class: 'row' }, [
         h('div', {}, [h('label', { text: '최소 글자 수' }), inMin]),
         h('div', {}, [h('label', { text: '최대 글자 수' }), inMax])
