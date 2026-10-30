@@ -292,3 +292,15 @@ body.has-sidebar .footer { margin-left: 228px; }
   .card.student-feedback { padding: 18px; }
   .student-feedback .fb-block { padding: 14px; }
 }
+
+/* Visible teacher onboarding and safe task management. */
+.setup-layout { display: grid; grid-template-columns: minmax(0,1.1fr) minmax(0,1fr); gap: 24px; align-items: start; }
+.setup-layout .steps li { line-height: 1.8; padding-bottom: 14px; }
+.setup-layout .steps .btn { white-space: normal; }
+.setup-layout .row { flex-wrap: wrap; }
+.setup-layout input { min-width: 0; }
+.setup-entry { border: 2px solid #6686b3; background: #edf4ff; }
+.setup-entry h2 { color: #173b6b; }
+.server-upgrade textarea { width: 100%; min-height: 180px; margin-top: 16px; font: 12px/1.6 monospace; }
+button.danger { color: #922e2e; border-color: #d9a7a7; }
+@media (max-width: 1000px) { .setup-layout { grid-template-columns: 1fr; } }
