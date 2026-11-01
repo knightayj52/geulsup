@@ -2,6 +2,8 @@
  * 글숲 (geulsup) — 학생 글쓰기 AI 피드백 앱 · 화면 로직
  * © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
  *
+ * v0.8.0 — 교사 제출글 보기: 이전/다음 학생 이동·학생 선택 메뉴·키보드 ←→, 미리 불러오기로 전환 속도 개선 · AI 제공자(Gemini/OpenAI/Claude) 표시
+ * v0.7.0 — 교사 설정 화면 · 과제 휴지통 · 갈래 8종
  * v0.6.1 — 학생 입장: 학급 코드 + 번호·이름 (개인 입장 코드 제거) · 피드백은 처음 볼 때 모두 펼쳐 보이고 이후 접기 가능
  * v0.6.0 — 개인 인증 · 저장 버전 관리 · 글쓰기/피드백 작업 공간
  * v0.5.0 — 5단계: 교사 피드백 한눈에
@@ -28,10 +30,30 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '0.7.0'; // server protocol version
-  var UI_VERSION = '0.7.0';
+  var APP_VERSION = '0.8.0'; // server protocol version
+  var UI_VERSION = '0.8.0';
   var editorLifecycle = null;
   var submissionNavigation = [];
+  // 제출글 상세 캐시 (제출ID → 응답). 학생을 오갈 때 다시 받지 않고, 이전/다음 학생은 미리 받아 둡니다
+  var detailCache = {};
+  var detailInflight = {};
+  function fetchDetail(id) {
+    if (detailCache[id]) return Promise.resolve(detailCache[id]);
+    if (detailInflight[id]) return detailInflight[id];
+    detailInflight[id] = teacherApi('submission.get', { submissionId: id })
+      .then(function (d) { detailCache[id] = d; delete detailInflight[id]; return d; })
+      .catch(function (e) { delete detailInflight[id]; throw e; });
+    return detailInflight[id];
+  }
+  function invalidateDetail(id) { if (id) delete detailCache[id]; else detailCache = {}; }
+  function prefetchNeighbors(id) {
+    var idx = submissionNavigation.map(function (x) { return x.id; }).indexOf(id);
+    if (idx < 0) return;
+    [idx + 1, idx - 1, idx + 2].forEach(function (i) {
+      var item = submissionNavigation[i];
+      if (item && !detailCache[item.id] && !detailInflight[item.id]) fetchDetail(item.id).catch(function () {});
+    });
+  }
   var teacherNoteCleanup = null;
   var routeVersion = 0;
 
@@ -742,7 +764,7 @@
     var status = h('p', { class: 'hint', text: '과제 휴지통·새 글 종류를 사용하려면 Code.gs 0.7.0이 필요합니다. 기존 학급과 학생 글은 유지됩니다.' });
     var copy = h('button', { class: 'secondary', text: '최신 Code.gs 불러오기', onclick: function () {
       setBusy(copy, true);
-      fetch('server/Code.gs?v=0.7.0').then(function (r) { if (!r.ok) throw new Error('코드를 불러오지 못했어요.'); return r.text(); })
+      fetch('server/Code.gs?v=' + APP_VERSION + '-' + Date.now()).then(function (r) { if (!r.ok) throw new Error('코드를 불러오지 못했어요.'); return r.text(); })
         .then(function (code) { text.value = code; text.hidden = false; copyAll.hidden = false; text.focus(); text.select(); text.scrollTop = 0; status.textContent = '아래 전체 코드를 복사해 Apps Script의 Code.gs 전체와 교체하세요. 학생 데이터는 이 코드에 들어 있지 않습니다.'; })
         .catch(function (e) { status.textContent = e.message; }).finally(function () { setBusy(copy, false); });
     } });
@@ -921,7 +943,8 @@
         clear(statusBox);
         statusBox.appendChild(keepVersion);
         statusBox.appendChild(h('li', {}, [h('span', { class: d.checks.sheets ? 'ok' : 'bad', text: d.checks.sheets ? '✅' : '❌' }), ' 시트 초기화 ' + (d.checks.sheets ? '완료' : '필요 (메뉴 → 시트 초기화)')]));
-        statusBox.appendChild(h('li', {}, [h('span', { class: d.checks.apiKey ? 'ok' : 'bad', text: d.checks.apiKey ? '✅' : '❌' }), ' Gemini API 키 ' + (d.checks.apiKey ? '등록됨 (' + d.teacher.model + ')' : '없음 — 설정 시트에 입력하세요')]));
+        var provLabel = d.teacher.providerLabel || 'Gemini';
+        statusBox.appendChild(h('li', {}, [h('span', { class: d.checks.apiKey ? 'ok' : 'bad', text: d.checks.apiKey ? '✅' : '❌' }), ' AI: ' + provLabel + ' · ' + (d.checks.apiKey ? '키 등록됨 (' + d.teacher.model + ')' : (d.checks.apiKeyHint || '키 없음') + ' — 설정 시트에서 "AI 제공자"와 해당 키를 입력하세요')]));
         statusBox.appendChild(h('li', {}, [h('span', { class: 'ok', text: '✅' }), ' 교사 비밀번호 설정됨']));
         statusBox.appendChild(h('li', {}, [h('span', { class: d.checks.rubrics ? 'ok' : 'bad', text: d.checks.rubrics ? '✅' : '❌' }), ' 기본 루브릭 ' + (d.checks.rubrics ? '준비됨 (루브릭 시트에서 문구 수정 가능)' : '없음 — 시트 메뉴 → 기본 루브릭 다시 넣기')]));
         if (d.checks.apiKey) {
@@ -929,7 +952,7 @@
           var btnAi = h('button', { class: 'small secondary', text: 'AI 연결 테스트', onclick: function () {
             setBusy(btnAi, true, '확인 중…');
             teacherApi('ai.test')
-              .then(function (r) { aiLine.textContent = '✅ ' + r.model + ' 응답: "' + r.reply + '" (' + (r.ms / 1000).toFixed(1) + '초)'; })
+              .then(function (r) { aiLine.textContent = '✅ ' + (r.providerLabel || '') + ' ' + r.model + ' 응답: "' + r.reply + '" (' + (r.ms / 1000).toFixed(1) + '초)'; })
               .catch(function (e) { aiLine.textContent = '❌ ' + e.message; aiLine.className = 'bad'; })
               .then(function () { setBusy(btnAi, false); });
           } });
@@ -1435,7 +1458,10 @@
       .then(function (d) { if (viewTicket !== routeVersion) return;
         var c = d.counts;
         var criteria = d.task.criteria || [];
-        submissionNavigation = d.rows.filter(function (r) { return r.submissionId; }).map(function (r) { return { id: r.submissionId, name: r.no + '번 ' + r.name }; });
+        submissionNavigation = d.rows.filter(function (r) { return r.submissionId; }).map(function (r) { return { id: r.submissionId, name: r.no + '번 ' + r.name, state: r.state }; });
+        invalidateDetail();
+        // 첫 두 명은 미리 받아 둠 (보기 클릭 시 바로 뜨도록)
+        submissionNavigation.slice(0, 2).forEach(function (item) { fetchDetail(item.id).catch(function () {}); });
         var graded = d.rows.filter(function (r) { return r.feedback; });
 
         var summary = h('div', { class: 'count-row' }, [
@@ -1572,9 +1598,10 @@
     var viewTicket = ++routeVersion;
     if (teacherNoteCleanup) { teacherNoteCleanup(); teacherNoteCleanup = null; }
     if (!ssGet(KEYS.teacherToken)) { go('/teacher'); return; }
-    render(h('div', { class: 'card' }, [h('div', { class: 'loading', text: '글을 불러오는 중…' })]));
-    teacherApi('submission.get', { submissionId: submissionId })
+    if (!detailCache[submissionId]) render(h('div', { class: 'card' }, [h('div', { class: 'loading', text: '글을 불러오는 중…' })]));
+    fetchDetail(submissionId)
       .then(function (d) { if (viewTicket !== routeVersion) return;
+        prefetchNeighbors(submissionId);
         var sub = d.submission;
         var task = d.task;
         var backHref = task ? '#/teacher/class/' + task.classId + '/tasks/' + task.taskId + '/submissions' : '#/teacher/classes';
@@ -1584,7 +1611,7 @@
             if (!confirm(sub.name + ' 학생의 ' + sub.round + '차 제출을 되돌릴까요? 학생이 다시 고쳐서 제출할 수 있게 돼요.')) return;
             var b = ev.currentTarget; setBusy(b, true);
             teacherApi('submission.reopen', { submissionId: submissionId })
-              .then(function () { if (viewTicket !== routeVersion) return; toast('되돌렸어요. 학생 화면에서 다시 고칠 수 있어요.'); viewSubmissionDetail(submissionId); })
+              .then(function () { if (viewTicket !== routeVersion) return; invalidateDetail(submissionId); toast('되돌렸어요. 학생 화면에서 다시 고칠 수 있어요.'); viewSubmissionDetail(submissionId); })
               .catch(function (e) { if (viewTicket !== routeVersion) return; toast(e.message, true); setBusy(b, false); });
           } }));
         }
@@ -1611,7 +1638,7 @@
             if (sub.feedback && !confirm('AI 피드백을 다시 만들까요? 기존 AI 결과는 덮어써요. (교사 한마디·최종 단계는 유지)')) return;
             var b = ev.currentTarget; setBusy(b, true, 'AI가 읽는 중…');
             teacherApi('feedback.regenerate', { submissionId: submissionId })
-              .then(function () { if (viewTicket !== routeVersion) return; toast('AI 피드백을 만들었어요.'); viewSubmissionDetail(submissionId); })
+              .then(function () { if (viewTicket !== routeVersion) return; invalidateDetail(submissionId); toast('AI 피드백을 만들었어요.'); viewSubmissionDetail(submissionId); })
               .catch(function (e) { if (viewTicket !== routeVersion) return; toast(e.message, true); setBusy(b, false); });
           } });
           fbCard = sub.feedback
@@ -1633,10 +1660,48 @@
             ]);
           })));
         }
-        var nav = h('nav', { class: 'student-review-nav', 'aria-label': '학생 글 이동' }, submissionNavigation.map(function (item) { return h('a', { href: '#/teacher/submission/' + item.id, class: 'btn small ' + (item.id === submissionId ? '' : 'ghost'), text: item.name, 'aria-current': item.id === submissionId ? 'page' : null }); }));
-        render(nav, h('div', { class: 'review-workspace' }, [h('div', {}, [card, prev]), h('div', {}, [teacherCard, fbCard])]));
+        var nav = buildReviewNav(submissionId, task);
+        render(nav.top, h('div', { class: 'review-workspace' }, [h('div', {}, [card, prev]), h('div', {}, [teacherCard, fbCard])]), nav.bottom);
       })
       .catch(function (e) { if (viewTicket !== routeVersion) return; render(h('div', { class: 'card' }, [h('p', { class: 'bad', text: e.message }), h('a', { href: '#/teacher/classes', class: 'btn ghost small', text: '← 학급 목록' })])); });
+  }
+
+  // 학생 글 이동: 이전/다음 버튼 + 학생 선택 메뉴 + 키보드 ←→ (위·아래 두 곳)
+  var reviewKeyHandler = null;
+  function buildReviewNav(submissionId, task) {
+    var ids = submissionNavigation.map(function (x) { return x.id; });
+    var idx = ids.indexOf(submissionId);
+    var prevItem = idx > 0 ? submissionNavigation[idx - 1] : null;
+    var nextItem = idx >= 0 && idx < ids.length - 1 ? submissionNavigation[idx + 1] : null;
+    var listHref = task ? '#/teacher/class/' + task.classId + '/tasks/' + task.taskId + '/submissions' : '#/teacher/classes';
+    function goTo(item) { if (item) go('/teacher/submission/' + item.id); }
+    function make(withSelect) {
+      var sel = null;
+      if (withSelect && submissionNavigation.length) {
+        sel = h('select', { class: 'review-select', 'aria-label': '학생 선택' }, submissionNavigation.map(function (item) {
+          return h('option', { value: item.id, text: item.name + (item.state ? ' · ' + item.state : '') });
+        }));
+        sel.value = submissionId;
+        sel.addEventListener('change', function () { go('/teacher/submission/' + sel.value); });
+      }
+      return h('nav', { class: 'review-nav', 'aria-label': '학생 글 이동' }, [
+        h('a', { href: listHref, class: 'btn small ghost', text: '← 제출 현황' }),
+        h('button', { class: 'small secondary', text: '◀ 이전 학생' + (prevItem ? ' · ' + prevItem.name : ''), disabled: prevItem ? null : 'disabled', onclick: function () { goTo(prevItem); } }),
+        sel,
+        h('span', { class: 'review-pos muted', text: idx >= 0 ? (idx + 1) + ' / ' + ids.length : '' }),
+        h('button', { class: 'small', text: '다음 학생 ▶' + (nextItem ? ' · ' + nextItem.name : ''), disabled: nextItem ? null : 'disabled', onclick: function () { goTo(nextItem); } })
+      ]);
+    }
+    if (reviewKeyHandler) window.removeEventListener('keydown', reviewKeyHandler);
+    reviewKeyHandler = function (ev) {
+      var t = ev.target && ev.target.tagName;
+      if (t === 'TEXTAREA' || t === 'INPUT' || t === 'SELECT' || ev.altKey || ev.ctrlKey || ev.metaKey) return;
+      if (!/^#\/teacher\/submission\//.test(location.hash)) { window.removeEventListener('keydown', reviewKeyHandler); reviewKeyHandler = null; return; }
+      if (ev.key === 'ArrowRight') goTo(nextItem);
+      if (ev.key === 'ArrowLeft') goTo(prevItem);
+    };
+    window.addEventListener('keydown', reviewKeyHandler);
+    return { top: make(true), bottom: make(false) };
   }
 
   // 교사 한마디 · 기준별 최종 단계 편집 카드
@@ -1671,7 +1736,7 @@
       setBusy(btn, true, '저장 중…');
       note.disabled = true; Object.keys(selects).forEach(function (id) { selects[id].disabled = true; });
       teacherApi('feedback.teacher', { submissionId: submissionId, teacherNote: note.value.trim(), finalLevels: finalLevels })
-        .then(function () { initialNote = note.value; initialLevels = JSON.stringify(Object.keys(selects).map(function (id) { return selects[id].value; })); toast('저장했어요. 학생 화면에 반영돼요.'); setBusy(btn, false); })
+        .then(function () { invalidateDetail(submissionId); initialNote = note.value; initialLevels = JSON.stringify(Object.keys(selects).map(function (id) { return selects[id].value; })); toast('저장했어요. 학생 화면에 반영돼요.'); setBusy(btn, false); })
         .catch(function (e) { toast(e.message, true); setBusy(btn, false); }).finally(function () { note.disabled = false; Object.keys(selects).forEach(function (id) { selects[id].disabled = false; }); });
     });
     return h('div', { class: 'card teacher-edit' }, [

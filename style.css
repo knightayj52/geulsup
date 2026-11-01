@@ -317,6 +317,13 @@ a.task-item:active { transform: translateY(1px); }
 .final-row select { padding: 8px 10px; font-size: 14px; }
 @media (max-width: 480px) { .final-row { grid-template-columns: 1fr; } }
 
+/* ───── 교사: 학생 글 이동 (이전/다음·선택) ───── */
+.review-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 12px; }
+.review-nav .review-select { flex: 1 1 180px; max-width: 320px; padding: 8px 10px; font-size: 14px; }
+.review-nav .review-pos { white-space: nowrap; }
+.review-nav button[disabled] { opacity: .4; }
+.app > .review-nav:last-child { margin: 12px 0 0; }
+
 .muted { color: var(--ink-soft); font-size: 13px; }
 .center { text-align: center; }
 

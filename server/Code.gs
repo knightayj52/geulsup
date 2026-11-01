@@ -2,6 +2,8 @@
  * 글숲 (geulsup) — 학생 글쓰기 AI 피드백 앱 · 서버 (Google Apps Script)
  * © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
  *
+ * v0.8.0 — AI 제공자 선택(Gemini / OpenAI / Claude) · 동시 제출 안정화(재시도 간격 확대) · 교사 조회 속도(요청 내 시트 캐시)
+ * v0.7.0 — 교사 설정 화면 · 과제 휴지통 · 갈래 8종
  * v0.6.1 — 학생 입장을 학급 코드 + 번호·이름으로 되돌림 (개인 입장 코드 제거, 세션 토큰·저장 버전 관리는 유지)
  * v0.6.0 — 개인 인증 · 저장 버전 관리 · AI 중복/오래된 결과 방지 · 원문 검증
  * v0.5.0 — 5단계: 교사 피드백 한눈에
@@ -29,7 +31,7 @@
  */
 
 var APP_NAME = '글숲';
-var APP_VERSION = '0.7.0';
+var APP_VERSION = '0.8.0';
 var requestCache_ = {};
 
 // ─────────────────────────────────────────────
@@ -497,9 +499,19 @@ HEADERS[SHEETS.feedback]    = ['제출ID', '차수', '기준별결과(JSON)', '�
 HEADERS[SHEETS.rubrics]     = ['갈래', '학년군', '기준ID', '기준이름', '구분', '1단계', '2단계', '3단계', '4단계'];
 
 // 설정 시트 행 (A: 항목, B: 값, C: 안내)
+var PROVIDERS = {
+  gemini: { label: 'Gemini (Google)', keyRow: 'Gemini API 키', modelRow: '모델', defaultModel: DEFAULT_MODEL },
+  openai: { label: 'OpenAI (ChatGPT)', keyRow: 'OpenAI API 키', modelRow: 'OpenAI 모델', defaultModel: 'gpt-5-mini' },
+  claude: { label: 'Claude (Anthropic)', keyRow: 'Claude API 키', modelRow: 'Claude 모델', defaultModel: 'claude-haiku-5-5' }
+};
 var SETTINGS_ROWS = [
+  ['AI 제공자',      'gemini',       '어느 AI로 피드백을 만들지 고릅니다: gemini / openai / claude 중 하나. 고른 제공자의 키·모델 칸만 채우면 됩니다. (교사 화면 → AI 연결 테스트로 확인)'],
   ['Gemini API 키',  '',             'Google AI Studio(aistudio.google.com)에서 발급한 키를 붙여 넣으세요. 이 시트는 교사만 보므로 학생에게 노출되지 않습니다.'],
-  ['모델',           DEFAULT_MODEL,  '기본값 그대로 두면 됩니다. (' + MODELS.map(function (m) { return m.id; }).join(' / ') + ')'],
+  ['모델',           DEFAULT_MODEL,  'Gemini 모델. 기본값 그대로 두면 됩니다. (' + MODELS.map(function (m) { return m.id; }).join(' / ') + ')'],
+  ['OpenAI API 키',  '',             'platform.openai.com에서 발급한 키 (sk-…). AI 제공자가 openai일 때만 씁니다.'],
+  ['OpenAI 모델',    'gpt-5-mini',   'OpenAI 모델 이름. 비용이 낮은 mini 계열을 권해요. 이름이 바뀌면 여기만 고치세요.'],
+  ['Claude API 키',  '',             'console.anthropic.com에서 발급한 키 (sk-ant-…). AI 제공자가 claude일 때만 씁니다.'],
+  ['Claude 모델',    'claude-haiku-5-5', 'Claude 모델 이름. 비용이 낮은 haiku 계열을 권해요. 이름이 바뀌면 여기만 고치세요.'],
   ['교사 비밀번호',  '',             '웹 화면에서 교사 모드로 들어갈 때 쓰는 비밀번호입니다. 영문·숫자 6자 이상 권장.'],
   ['교사 이름',      '',             '예: 홍길동'],
   ['학교',           '',             '예: 매안초등학교'],
@@ -583,14 +595,31 @@ function setupSettingsSheet_(ss) {
   if (sh.getLastRow() === 0) {
     sh.getRange(1, 1, 1, 3).setValues([['항목', '값', '안내']]);
     sh.getRange(2, 1, SETTINGS_ROWS.length, 3).setValues(SETTINGS_ROWS);
+  } else {
+    ensureSettingsRows_(sh);
   }
   styleHeader_(sh, 3);
-  sh.getRange(2, 2, SETTINGS_ROWS.length, 1).setBackground(YELLOW).setNumberFormat('@');
-  sh.getRange(2, 3, SETTINGS_ROWS.length, 1).setFontColor('#666666').setWrap(true);
+  var n = Math.max(sh.getLastRow() - 1, SETTINGS_ROWS.length);
+  sh.getRange(2, 2, n, 1).setBackground(YELLOW).setNumberFormat('@');
+  sh.getRange(2, 3, n, 1).setFontColor('#666666').setWrap(true);
   sh.setColumnWidth(1, 140);
   sh.setColumnWidth(2, 320);
   sh.setColumnWidth(3, 520);
   sh.setFrozenRows(1);
+}
+
+// 예전 버전 설정 시트에 새 항목(AI 제공자, OpenAI/Claude 키·모델 등)을 뒤에 덧붙입니다. 기존 값은 건드리지 않음.
+function ensureSettingsRows_(sh) {
+  var last = sh.getLastRow();
+  var have = {};
+  if (last >= 2) sh.getRange(2, 1, last - 1, 1).getValues().forEach(function (r) { have[String(r[0] || '').trim()] = true; });
+  var missing = SETTINGS_ROWS.filter(function (r) { return !have[r[0]]; });
+  if (!missing.length) return false;
+  sh.getRange(last + 1, 1, missing.length, 3).setValues(missing);
+  sh.getRange(last + 1, 2, missing.length, 1).setBackground(YELLOW).setNumberFormat('@');
+  sh.getRange(last + 1, 3, missing.length, 1).setFontColor('#666666').setWrap(true);
+  delete requestCache_.settings;
+  return true;
 }
 
 function setupTableSheet_(ss, name, headers) {
@@ -669,7 +698,11 @@ function doPost(e) {
   }
 }
 
+// 읽기만 하는 요청은 같은 시트를 한 번만 읽도록 캐시합니다 (교사 화면 조회 속도)
+var READ_ONLY_ACTIONS = { 'ping': 1, 'task.listForStudent': 1, 'submission.mine': 1, 'teacher.status': 1, 'class.list': 1, 'student.list': 1, 'rubric.defaults': 1, 'task.list': 1, 'task.get': 1, 'submission.list': 1, 'submission.get': 1 };
+
 function route_(action, body) {
+  requestCache_.readOnly = !!READ_ONLY_ACTIONS[action];
   switch (action) {
     // 공개
     case 'ping':                 return ok_({ app: APP_NAME, version: APP_VERSION, protocol: 2, capabilities: ['taskTrash', 'expandedRubrics'], genres: GENRES, bands: BANDS });
@@ -730,11 +763,21 @@ function getSettings_() {
     var k = String(r[0] || '').trim();
     if (k) s[k] = String(r[1] || '').trim();
   });
-  var model = s['모델'] || DEFAULT_MODEL;
-  if (RETIRED_MODELS[model]) model = RETIRED_MODELS[model];
+  var geminiModel = s['모델'] || DEFAULT_MODEL;
+  if (RETIRED_MODELS[geminiModel]) geminiModel = RETIRED_MODELS[geminiModel];
+  var provider = String(s['AI 제공자'] || 'gemini').toLowerCase().replace(/[^a-z]/g, '');
+  if (/chatgpt|gpt|openai/.test(provider)) provider = 'openai';
+  else if (/claude|anthropic/.test(provider)) provider = 'claude';
+  else provider = 'gemini';
+  var keys = { gemini: s['Gemini API 키'] || '', openai: s['OpenAI API 키'] || '', claude: s['Claude API 키'] || '' };
+  var models = { gemini: geminiModel, openai: s['OpenAI 모델'] || PROVIDERS.openai.defaultModel, claude: s['Claude 모델'] || PROVIDERS.claude.defaultModel };
   return requestCache_.settings = {
-    apiKey:    s['Gemini API 키'] || '',
-    model:     model,
+    provider:  provider,
+    providerLabel: PROVIDERS[provider].label,
+    apiKey:    keys[provider],      // 현재 제공자의 키 (하위 호환)
+    model:     models[provider],    // 현재 제공자의 모델
+    keys:      keys,
+    models:    models,
     password:  s['교사 비밀번호'] || '',
     teacher:   s['교사 이름'] || '',
     school:    s['학교'] || ''
@@ -787,10 +830,11 @@ function requireTeacher_(body) {
 }
 function teacherInfo_() {
   var st = getSettings_();
-  return { name: st.teacher, school: st.school, model: st.model, hasApiKey: !!st.apiKey };
+  return { name: st.teacher, school: st.school, model: st.model, provider: st.provider, providerLabel: st.providerLabel, hasApiKey: !!st.apiKey };
 }
 
 function teacherStatus_() {
+  try { if (ensureSettingsRows_(sheet_(SHEETS.settings))) delete requestCache_.settings; } catch (e) { /* 설정 시트 없음 → checks.sheets에서 드러남 */ }
   var st = getSettings_();
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var rubricSheet = ss.getSheetByName(SHEETS.rubrics);
@@ -798,6 +842,7 @@ function teacherStatus_() {
     teacher: teacherInfo_(),
     checks: {
       apiKey:   !!st.apiKey,
+      apiKeyHint: st.apiKey ? '' : (PROVIDERS[st.provider].keyRow + ' 칸이 비어 있어요'),
       password: !!st.password,
       sheets:   Object.keys(HEADERS).every(function (n) { return !!ss.getSheetByName(n); }),
       rubrics:  !!(rubricSheet && rubricSheet.getLastRow() >= 2)
@@ -1651,7 +1696,7 @@ function generateFeedback_(submissionId, force) {
 }
 function generateFeedbackWork_(submissionId) {
   var st = getSettings_();
-  if (!st.apiKey) throw new Error('선생님이 아직 AI 키를 설정하지 않았어요. (설정 시트 → Gemini API 키)');
+  if (!st.apiKey) throw new Error('선생님이 아직 AI 키를 설정하지 않았어요. (설정 시트 → ' + PROVIDERS[st.provider].keyRow + ')');
   var sub = findSubmission_(submissionId);
   if (!sub) throw new Error('제출글을 찾을 수 없어요.');
   if (sub.status === SUB_STATUS.draft) throw new Error('제출된 글만 피드백을 받을 수 있어요.');
@@ -1665,7 +1710,7 @@ function generateFeedbackWork_(submissionId) {
   var prevFb = prev ? feedbackMap_([prev.submissionId])[prev.submissionId] : null;
 
   var prompt = buildFeedbackPrompt_(task, sub, cls, prev, prevFb);
-  var raw = callGemini_(st.apiKey, st.model, prompt.system, prompt.user, feedbackSchema_());
+  var raw = callAI_(st, prompt.system, prompt.user, feedbackSchema_());
   var fb = normalizeFeedback_(raw, task, sub, !!prev, prevFb);
 
   // 저장 (제출ID당 한 행 — 다시 채점하면 덮어씀)
@@ -1674,7 +1719,7 @@ function generateFeedbackWork_(submissionId) {
     sub.submissionId, sub.round, JSON.stringify(fb.criteria),
     fb.strengths.join('\n'), fb.improvements.join('\n'), fb.nextTry,
     JSON.stringify(fb.corrections), '', '{}', now,
-    fb.summary, st.model, fb.growth ? JSON.stringify(fb.growth) : ''
+    fb.summary, st.provider + ':' + st.model, fb.growth ? JSON.stringify(fb.growth) : ''
   ];
   var lock = LockService.getScriptLock();
   lock.waitLock(10000);
@@ -1699,7 +1744,7 @@ function generateFeedbackWork_(submissionId) {
   fb.submissionId = sub.submissionId;
   fb.round = sub.round;
   fb.createdAt = now;
-  fb.model = st.model;
+  fb.model = st.provider + ':' + st.model;
   fb.teacherNote = rowVals[7] || '';
   try { fb.finalLevels = JSON.parse(rowVals[8] || '{}') || {}; } catch (e) { fb.finalLevels = {}; }
   return fb;
@@ -1886,6 +1931,110 @@ function normalizeFeedback_(raw, task, sub, hasPrev, prevFb) {
 }
 
 // Gemini 호출 — JSON 모드. 429/5xx·JSON 깨짐은 한 번 재시도
+// 재시도 간격: 동시 제출로 429(바쁨)가 나면 3초 → 10초 → 25초 뒤 다시 시도 (총 4회)
+var AI_RETRY_WAITS = [0, 3000, 10000, 25000];
+
+// 설정의 AI 제공자에 따라 호출을 나눕니다. 모두 같은 (system, user, JSON 스키마) → 객체 규약
+function callAI_(st, systemText, userText, schema) {
+  if (st.provider === 'openai') return callOpenAI_(st.apiKey, st.model, systemText, userText, schema);
+  if (st.provider === 'claude') return callClaude_(st.apiKey, st.model, systemText, userText, schema);
+  return callGemini_(st.apiKey, st.model, systemText, userText, schema);
+}
+
+// OpenAI strict JSON 스키마용: 모든 object에 additionalProperties:false, 모든 속성을 required로
+function strictSchema_(schema) {
+  var out = JSON.parse(JSON.stringify(schema));
+  (function walk(node) {
+    if (!node || typeof node !== 'object') return;
+    if (node.type === 'object' && node.properties) {
+      node.additionalProperties = false;
+      node.required = Object.keys(node.properties);
+      Object.keys(node.properties).forEach(function (k) { walk(node.properties[k]); });
+    }
+    if (node.type === 'array' && node.items) walk(node.items);
+  })(out);
+  return out;
+}
+
+function extractApiError_(body) {
+  try { var j = JSON.parse(body); var e = j.error || j; return String(e.message || e.msg || '').slice(0, 200); } catch (e) { return ''; }
+}
+
+// 공통 HTTP 재시도 루프. parse(code, body)는 {result} 또는 {retry:'메시지'}를 돌려주거나 예외를 던짐
+function aiFetchLoop_(url, buildOptions, parse) {
+  var lastErr = null;
+  for (var attempt = 0; attempt < AI_RETRY_WAITS.length; attempt++) {
+    if (AI_RETRY_WAITS[attempt]) Utilities.sleep(AI_RETRY_WAITS[attempt]);
+    var res;
+    try {
+      res = UrlFetchApp.fetch(url, buildOptions());
+    } catch (e) {
+      lastErr = 'AI 서버에 연결하지 못했어요. 잠시 뒤 다시 시도해 주세요.'; continue;
+    }
+    var code = res.getResponseCode();
+    var body = res.getContentText();
+    if (code === 429 || code >= 500) { lastErr = 'AI 서버가 바빠요 (' + code + '). 잠시 뒤 다시 시도해 주세요.'; continue; }
+    var r = parse(code, body);
+    if (r && r.retry) { lastErr = r.retry; continue; }
+    return r.result;
+  }
+  throw new Error(lastErr || 'AI 피드백 생성에 실패했어요.');
+}
+
+function callOpenAI_(apiKey, model, systemText, userText, schema) {
+  var url = 'https://api.openai.com/v1/chat/completions';
+  var payload = {
+    model: model,
+    messages: [{ role: 'system', content: systemText }, { role: 'user', content: userText }],
+    response_format: { type: 'json_schema', json_schema: { name: 'geulsup_feedback', strict: true, schema: strictSchema_(schema) } },
+    max_completion_tokens: GEN_MAX_TOKENS
+  };
+  var withTemp = true;
+  return aiFetchLoop_(url, function () {
+    var pl = JSON.parse(JSON.stringify(payload));
+    if (withTemp) pl.temperature = GEN_TEMPERATURE;
+    return { method: 'post', contentType: 'application/json', headers: { Authorization: 'Bearer ' + apiKey }, payload: JSON.stringify(pl), muteHttpExceptions: true };
+  }, function (code, body) {
+    if (code === 400 && withTemp && /temperature/i.test(body)) { withTemp = false; return { retry: 'temperature 미지원 모델 → 제외하고 재시도' }; }
+    if (code === 401 || code === 403) throw new Error('OpenAI 키가 올바르지 않아요 (' + code + '). 설정 시트의 OpenAI API 키를 확인해 주세요. ' + extractApiError_(body));
+    if (code === 404 || (code === 400 && /model/i.test(body))) throw new Error('OpenAI 모델 "' + model + '"을 쓸 수 없어요. 설정 시트의 OpenAI 모델 이름을 확인해 주세요. ' + extractApiError_(body));
+    if (code !== 200) throw new Error('OpenAI 응답 오류 (' + code + '): ' + extractApiError_(body));
+    var data; try { data = JSON.parse(body); } catch (e) { return { retry: 'AI 응답을 읽을 수 없어요.' }; }
+    var ch = data.choices && data.choices[0];
+    if (!ch || !ch.message) return { retry: 'AI가 답을 주지 않았어요.' };
+    if (ch.message.refusal) throw new Error('AI가 이 글의 피드백 생성을 거부했어요: ' + String(ch.message.refusal).slice(0, 120));
+    if (ch.finish_reason === 'length') return { retry: '피드백이 너무 길어 잘렸어요.' };
+    try { return { result: JSON.parse(stripCodeFence_(ch.message.content || '')) }; } catch (e) { return { retry: 'AI 응답(JSON)을 해석하지 못했어요.' }; }
+  });
+}
+
+function callClaude_(apiKey, model, systemText, userText, schema) {
+  var url = 'https://api.anthropic.com/v1/messages';
+  // 도구 호출을 강제해 JSON 스키마대로 받습니다 (tool_use.input이 곧 결과)
+  var payload = {
+    model: model,
+    max_tokens: GEN_MAX_TOKENS,
+    temperature: GEN_TEMPERATURE,
+    system: systemText,
+    messages: [{ role: 'user', content: userText }],
+    tools: [{ name: 'geulsup_feedback', description: '글쓰기 피드백 결과를 정해진 형식으로 기록합니다.', input_schema: schema }],
+    tool_choice: { type: 'tool', name: 'geulsup_feedback' }
+  };
+  return aiFetchLoop_(url, function () {
+    return { method: 'post', contentType: 'application/json', headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }, payload: JSON.stringify(payload), muteHttpExceptions: true };
+  }, function (code, body) {
+    if (code === 401 || code === 403) throw new Error('Claude 키가 올바르지 않아요 (' + code + '). 설정 시트의 Claude API 키를 확인해 주세요. ' + extractApiError_(body));
+    if (code === 404 || (code === 400 && /model/i.test(body))) throw new Error('Claude 모델 "' + model + '"을 쓸 수 없어요. 설정 시트의 Claude 모델 이름을 확인해 주세요. ' + extractApiError_(body));
+    if (code !== 200) throw new Error('Claude 응답 오류 (' + code + '): ' + extractApiError_(body));
+    var data; try { data = JSON.parse(body); } catch (e) { return { retry: 'AI 응답을 읽을 수 없어요.' }; }
+    if (data.stop_reason === 'max_tokens') return { retry: '피드백이 너무 길어 잘렸어요.' };
+    var tool = (data.content || []).filter(function (c) { return c.type === 'tool_use'; })[0];
+    if (tool && tool.input && typeof tool.input === 'object') return { result: tool.input };
+    var text = (data.content || []).map(function (c) { return c.text || ''; }).join('');
+    try { return { result: JSON.parse(stripCodeFence_(text)) }; } catch (e) { return { retry: 'AI 응답(JSON)을 해석하지 못했어요.' }; }
+  });
+}
+
 function callGemini_(apiKey, model, systemText, userText, schema) {
   var url = 'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent';
   var genCfg = {
@@ -1904,8 +2053,8 @@ function callGemini_(apiKey, model, systemText, userText, schema) {
     generationConfig: genCfg
   };
   var lastErr = null;
-  for (var attempt = 0; attempt < 2; attempt++) {
-    if (attempt) Utilities.sleep(2000);
+  for (var attempt = 0; attempt < AI_RETRY_WAITS.length; attempt++) {
+    if (AI_RETRY_WAITS[attempt]) Utilities.sleep(AI_RETRY_WAITS[attempt]);
     var res;
     try {
       res = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', headers: { 'x-goog-api-key': apiKey }, payload: JSON.stringify(payload), muteHttpExceptions: true });
@@ -1914,7 +2063,7 @@ function callGemini_(apiKey, model, systemText, userText, schema) {
     }
     var code = res.getResponseCode();
     var body = res.getContentText();
-    if (code === 429 || code >= 500) { lastErr = 'AI 서버가 바빠요 (' + code + '). 잠시 뒤 다시 시도해 주세요.'; continue; }
+    if (code === 429 || code >= 500) { lastErr = 'AI 서버가 바빠요 (' + code + '). 잠시 뒤 다시 시도해 주세요.' + (code === 429 ? ' 무료 키라면 분당 요청 한도일 수 있어요.' : ''); continue; }
     if (code === 400 && /thinking/i.test(body)) {
       // 모델이 thinkingConfig를 지원하지 않는 경우 → 빼고 재시도
       delete payload.generationConfig.thinkingConfig; lastErr = 'thinkingConfig 미지원'; continue;
@@ -1987,11 +2136,11 @@ function feedbackTeacher_(body) {
 // 교사: AI 연결 테스트 (키·모델 확인)
 function aiTest_() {
   var st = getSettings_();
-  if (!st.apiKey) return fail_('설정 시트에 Gemini API 키가 없어요.');
+  if (!st.apiKey) return fail_('설정 시트의 "' + PROVIDERS[st.provider].keyRow + '" 칸이 비어 있어요. (AI 제공자: ' + st.provider + ')');
   var started = Date.now();
-  var raw = callGemini_(st.apiKey, st.model, '주어진 JSON 스키마대로만 답하세요.', '한국어로 "안녕하세요"라고 인사해 주세요.',
+  var raw = callAI_(st, '주어진 JSON 스키마대로만 답하세요.', '한국어로 "안녕하세요"라고 인사해 주세요.',
     { type: 'object', properties: { greeting: { type: 'string' } }, required: ['greeting'] });
-  return ok_({ model: st.model, reply: String(raw.greeting || ''), ms: Date.now() - started });
+  return ok_({ provider: st.provider, providerLabel: st.providerLabel, model: st.model, reply: String(raw.greeting || ''), ms: Date.now() - started });
 }
 
 // ─────────────────────────────────────────────
@@ -2019,7 +2168,7 @@ function sheet_(name) {
 
 // 헤더를 키로 하는 객체 배열로 읽기
 function readTable_(name) {
-  var cacheable = name === SHEETS.students || name === SHEETS.classes;
+  var cacheable = name === SHEETS.students || name === SHEETS.classes || !!requestCache_.readOnly;
   if (cacheable && requestCache_[name]) return requestCache_[name];
   var sh = sheet_(name);
   var last = sh.getLastRow();
