@@ -30,8 +30,8 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '0.8.1'; // server protocol version (화면 버전은 UI_VERSION)
-  var UI_VERSION = '0.8.2';
+  var APP_VERSION = '0.8.2'; // server protocol version (화면 버전은 UI_VERSION)
+  var UI_VERSION = '0.8.3';
   var editorLifecycle = null;
   var submissionNavigation = [];
   // 제출글 상세 캐시 (제출ID → 응답). 학생을 오갈 때 다시 받지 않고, 이전/다음 학생은 미리 받아 둡니다
@@ -471,7 +471,11 @@
   // ───────────────────────────────────────────
   // 학생: 과제 상세 + 글쓰기 편집기
   // ───────────────────────────────────────────
-  function countChars(text) { return String(text || '').replace(/\r\n/g, '\n').trim().length; }
+  // 서버 cleanText_와 같은 규칙: 낱말 사이 두 칸 이상은 한 칸, 줄 끝 공백 제거
+  function cleanText(text) {
+    return String(text || '').replace(/\r\n?/g, '\n').replace(/[\u00a0\u3000\u2000-\u200b\t]/g, ' ').replace(/ {2,}/g, ' ').replace(/ +\n/g, '\n').replace(/\n +/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  function countChars(text) { return cleanText(text).length; }
 
   function studentPayload(extra) {
     var s = getStudent();
@@ -652,7 +656,7 @@
     function serverSave(manual) {
       if (saving) { dirty = true; return savePromise.then(function () { return hasChanges() ? serverSave(manual) : undefined; }); }
       if (!hasChanges() && !manual) return Promise.resolve();
-      var payload = { token: studentAuth.token, taskId: taskId, round: mine.nextRound, revision: revision, title: inTitle.value.trim(), text: ta.value.trim() };
+      var payload = { token: studentAuth.token, taskId: taskId, round: mine.nextRound, revision: revision, title: inTitle.value.trim(), text: cleanText(ta.value) };
       saving = true; dirty = false; saveState.textContent = '서버에 저장 중…';
       savePromise = api('submission.saveDraft', payload, serverId).then(function (d) {
         revision = d.revision; lastSent = { title: payload.title, text: payload.text };
@@ -689,7 +693,7 @@
       setBusy(btnSubmit, true, '글을 저장하는 중…');
       serverSave(false).then(function () {
         btnSubmit.textContent = '제출하고 피드백을 만드는 중…';
-        return api('submission.submit', { token: studentAuth.token, taskId: taskId, title: inTitle.value.trim(), text: ta.value.trim(), round: mine.nextRound, revision: revision }, serverId);
+        return api('submission.submit', { token: studentAuth.token, taskId: taskId, title: inTitle.value.trim(), text: cleanText(ta.value), round: mine.nextRound, revision: revision }, serverId);
       }).then(function (d) {
         lsDel(localKey);
         if (!disposed) { toast(d.feedback ? '제출과 피드백이 완료됐어요 🌳' : '글은 제출됐어요. 피드백은 다시 요청할 수 있어요.'); viewStudentTask(taskId); }
@@ -1921,5 +1925,5 @@
   route();
 
   // 테스트용 노출 (브라우저 콘솔)
-  window.__geulsup = { version: APP_VERSION, uiVersion: UI_VERSION, parseRoster: parseRoster, extractDeployId: extractDeployId, taskConditionText: taskConditionText, bandForGrade: bandForGrade, countChars: countChars, conditionChecks: conditionChecks, fmtTime: fmtTime, levelSummary: levelSummary };
+  window.__geulsup = { version: APP_VERSION, uiVersion: UI_VERSION, parseRoster: parseRoster, extractDeployId: extractDeployId, taskConditionText: taskConditionText, bandForGrade: bandForGrade, countChars: countChars, cleanText: cleanText, conditionChecks: conditionChecks, fmtTime: fmtTime, levelSummary: levelSummary };
 })();

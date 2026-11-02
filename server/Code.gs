@@ -32,7 +32,7 @@
  */
 
 var APP_NAME = '글숲';
-var APP_VERSION = '0.8.1';
+var APP_VERSION = '0.8.2';
 var requestCache_ = {};
 
 // ─────────────────────────────────────────────
@@ -1322,8 +1322,23 @@ function countChars_(text) {
   return String(text || '').replace(/\r\n/g, '\n').trim().length;
 }
 
+// 글 정리: 줄바꿈 통일, 전각·특수 공백 → 보통 공백, 낱말 사이 두 칸 이상 → 한 칸, 줄 끝 공백 제거, 빈 줄 3개 이상 → 2개.
+// 화면에서는 연속 공백이 한 칸으로 보이므로, 그대로 두면 AI가 "것도  척척 → 것도 척척"처럼 보이지 않는 차이를 지적해 학생이 헷갈림.
 function cleanText_(text) {
-  return String(text || '').replace(/\r\n/g, '\n').replace(/\u0000/g, '').trim();
+  return String(text || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\u0000/g, '')
+    .replace(/[\u00a0\u3000\u2000-\u200b\t]/g, ' ')
+    .replace(/ {2,}/g, ' ')
+    .replace(/ +\n/g, '\n')
+    .replace(/\n +/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// 공백 개수만 다른 고칠 곳인지 (예: "것도  척척" → "것도 척척"). 진짜 띄어쓰기 오류("할수" → "할 수")는 다름.
+function spacingOnlyDiff_(a, b) {
+  return String(a).replace(/\s+/g, ' ').trim() === String(b).replace(/\s+/g, ' ').trim();
 }
 
 // 학생 신원 확인: 학급ID+코드가 맞고 명단에 있어야 함. 성공 시 {cls, no, name} 반환, 실패 시 {error}
@@ -1802,6 +1817,7 @@ function buildFeedbackPrompt_(task, sub, cls, prev, prevFb) {
     '- nextTry: 고쳐 쓸 때 가장 효과가 큰 한 가지를 한 문장으로.',
     '- summary: 글 전체에 대한 따뜻한 총평 2~3문장. 학생 이름은 쓰지 마세요.',
     '- corrections: 맞춤법·띄어쓰기·문장 부호·어색한 표현 중 ' + (task.maxCorrections ? '중요한 것만 최대 ' + task.maxCorrections + '개. ' : '확실한 것을 모두 (같은 유형이 반복되면 대표 1~2개만). ') + 'original은 학생 글에 있는 그대로, fixed는 고친 것. 확실하지 않은 것은 넣지 마세요. 고칠 것이 없으면 빈 배열.',
+    '- 낱말 사이 공백의 개수(한 칸인지 두 칸인지)와 줄 끝 공백은 이미 정리되어 있으니 지적하지 마세요. 띄어쓰기 오류는 붙여 써야 할 것을 띄었거나, 띄어야 할 것을 붙인 경우만 해당합니다.',
     '- 같은 유형의 오류(예: "~것"을 붙여 쓰기, "~해야 된다"를 붙여 쓰기, "않/안" 혼동)는 대표 하나만 corrections에 넣고, "바른 글" 기준의 reason에서 "이런 식으로 붙여 쓴 곳이 몇 군데 더 있어요"처럼 알려 주세요. 서로 다른 유형을 고루 보여 주는 것이 한 유형을 여러 번 보여 주는 것보다 낫습니다.',
     '',
     '## 이 갈래(' + task.genreLabel + ')에서 특히 볼 것',
@@ -1932,7 +1948,7 @@ function normalizeFeedback_(raw, task, sub, hasPrev, prevFb) {
 
   var corrections = (Array.isArray(raw.corrections) ? raw.corrections : [])
     .map(function (x) { return { original: str(x && x.original), fixed: str(x && x.fixed), kind: str(x && x.kind) || '기타' }; })
-    .filter(function (x) { return x.original && x.fixed && x.original !== x.fixed && source.indexOf(x.original) >= 0 && x.original.indexOf('[개인정보]') < 0; });
+    .filter(function (x) { return x.original && x.fixed && !spacingOnlyDiff_(x.original, x.fixed) && source.indexOf(x.original) >= 0 && x.original.indexOf('[개인정보]') < 0; });
   if (task.maxCorrections) corrections = corrections.slice(0, task.maxCorrections);
 
   var growth = null;
