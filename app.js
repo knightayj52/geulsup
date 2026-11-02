@@ -765,7 +765,19 @@
     var copy = h('button', { class: 'secondary', text: '최신 Code.gs 불러오기', onclick: function () {
       setBusy(copy, true);
       fetch('server/Code.gs?v=' + APP_VERSION + '-' + Date.now()).then(function (r) { if (!r.ok) throw new Error('코드를 불러오지 못했어요.'); return r.text(); })
-        .then(function (code) { text.value = code; text.hidden = false; copyAll.hidden = false; text.focus(); text.select(); text.scrollTop = 0; status.textContent = '아래 전체 코드를 복사해 Apps Script의 Code.gs 전체와 교체하세요. 학생 데이터는 이 코드에 들어 있지 않습니다.'; })
+        .then(function (code) {
+          text.value = code; text.hidden = false; copyAll.hidden = false; text.focus(); text.select(); text.scrollTop = 0;
+          var m = code.match(/APP_VERSION = '([^']+)'/);
+          var codeVer = m ? m[1] : '?';
+          status.textContent = '불러온 코드 버전: v' + codeVer + ' (이 화면: v' + APP_VERSION + ')' + (codeVer !== APP_VERSION ? ' — 화면과 코드 버전이 달라요. 페이지를 강력 새로고침(Ctrl+Shift+R) 해 보세요.' : '') + ' · 아래 전체 코드를 복사해 Apps Script의 Code.gs 전체와 교체하세요. 학생 데이터는 이 코드에 들어 있지 않습니다.';
+          // 연결된 서버가 있으면 서버 버전과 비교해 업데이트 필요 여부를 바로 알려 줌
+          if (lsGet(KEYS.apiId, '')) {
+            api('ping').then(function (d) {
+              var sv = String(d.version || '?');
+              status.textContent += sv === codeVer ? ' · 연결된 서버도 v' + sv + '이라 교체할 필요 없어요.' : ' · 연결된 서버는 v' + sv + ' → 이 코드(v' + codeVer + ')로 교체하고 새 버전으로 배포하세요.';
+            }).catch(function () {});
+          }
+        })
         .catch(function (e) { status.textContent = e.message; }).finally(function () { setBusy(copy, false); });
     } });
     return h('div', { class: 'card server-upgrade' }, [h('h2', { text: '최신 코드 · 기존 사용자 업데이트' }), status, copy, copyAll, text,
