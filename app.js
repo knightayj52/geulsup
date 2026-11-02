@@ -30,8 +30,8 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '0.8.1'; // server protocol version
-  var UI_VERSION = '0.8.1';
+  var APP_VERSION = '0.8.1'; // server protocol version (화면 버전은 UI_VERSION)
+  var UI_VERSION = '0.8.2';
   var editorLifecycle = null;
   var submissionNavigation = [];
   // 제출글 상세 캐시 (제출ID → 응답). 학생을 오갈 때 다시 받지 않고, 이전/다음 학생은 미리 받아 둡니다
@@ -761,7 +761,15 @@
   function buildServerUpdateGuide() {
     var text = h('textarea', { readonly: true, 'aria-label': '최신 Code.gs 전체 코드', hidden: true });
     var copyAll = h('button', { class: 'small', text: '전체 코드 복사', hidden: true, onclick: function () { text.focus(); text.select(); copyText(text.value); } });
-    var status = h('p', { class: 'hint', text: '과제 휴지통·새 글 종류를 사용하려면 Code.gs 0.7.0이 필요합니다. 기존 학급과 학생 글은 유지됩니다.' });
+    var status = h('p', { class: 'hint', text: '이 화면은 v' + APP_VERSION + '이에요. 서버(Apps Script의 Code.gs)도 같은 버전이어야 모든 기능이 맞게 돌아갑니다. 기존 학급과 학생 글은 유지됩니다.' });
+    // 연결된 서버가 있으면 버전을 바로 비교해서 알려 줌
+    if (lsGet(KEYS.apiId, '')) {
+      api('ping').then(function (d) {
+        var sv = String(d.version || '?');
+        if (sv === APP_VERSION) { status.textContent = '연결된 서버 v' + sv + ' = 이 화면 v' + APP_VERSION + ' ✅ 최신이에요. 코드를 교체할 필요가 없습니다.'; status.className = 'hint ok'; }
+        else { status.textContent = '연결된 서버는 v' + sv + ', 이 화면은 v' + APP_VERSION + ' ⚠️ 아래 "최신 Code.gs 불러오기"로 코드를 복사해 Apps Script에 교체하고 새 버전으로 배포하세요.'; status.className = 'hint bad'; }
+      }).catch(function () {});
+    }
     var copy = h('button', { class: 'secondary', text: '최신 Code.gs 불러오기', onclick: function () {
       setBusy(copy, true);
       fetch('server/Code.gs?v=' + APP_VERSION + '-' + Date.now()).then(function (r) { if (!r.ok) throw new Error('코드를 불러오지 못했어요.'); return r.text(); })
