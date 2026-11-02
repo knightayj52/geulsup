@@ -2,6 +2,7 @@
  * 글숲 (geulsup) — 학생 글쓰기 AI 피드백 앱 · 서버 (Google Apps Script)
  * © 2026 영쌤클래스 · 교육용으로 제작 · 무단 복제·재배포 금지
  *
+ * v0.8.1 — 설정 시트: AI 제공자 드롭다운, 모델 칸 드롭다운(직접 입력 허용), 제공자별 사용 가능 모델 목록 조회(ai.models)
  * v0.8.0 — AI 제공자 선택(Gemini / OpenAI / Claude) · 동시 제출 안정화(재시도 간격 확대) · 교사 조회 속도(요청 내 시트 캐시)
  * v0.7.0 — 교사 설정 화면 · 과제 휴지통 · 갈래 8종
  * v0.6.1 — 학생 입장을 학급 코드 + 번호·이름으로 되돌림 (개인 입장 코드 제거, 세션 토큰·저장 버전 관리는 유지)
@@ -31,7 +32,7 @@
  */
 
 var APP_NAME = '글숲';
-var APP_VERSION = '0.8.0';
+var APP_VERSION = '0.8.1';
 var requestCache_ = {};
 
 // ─────────────────────────────────────────────
@@ -500,10 +501,14 @@ HEADERS[SHEETS.rubrics]     = ['갈래', '학년군', '기준ID', '기준이름'
 
 // 설정 시트 행 (A: 항목, B: 값, C: 안내)
 var PROVIDERS = {
-  gemini: { label: 'Gemini (Google)', keyRow: 'Gemini API 키', modelRow: '모델', defaultModel: DEFAULT_MODEL },
-  openai: { label: 'OpenAI (ChatGPT)', keyRow: 'OpenAI API 키', modelRow: 'OpenAI 모델', defaultModel: 'gpt-5-mini' },
-  claude: { label: 'Claude (Anthropic)', keyRow: 'Claude API 키', modelRow: 'Claude 모델', defaultModel: 'claude-haiku-5-5' }
+  gemini: { label: 'Gemini (Google)', keyRow: 'Gemini API 키', modelRow: '모델', defaultModel: DEFAULT_MODEL,
+    suggested: MODELS.map(function (m) { return m.id; }) },
+  openai: { label: 'OpenAI (ChatGPT)', keyRow: 'OpenAI API 키', modelRow: 'OpenAI 모델', defaultModel: 'gpt-5-mini',
+    suggested: ['gpt-5-mini', 'gpt-5', 'gpt-5-nano', 'gpt-4.1-mini', 'gpt-4.1'] },
+  claude: { label: 'Claude (Anthropic)', keyRow: 'Claude API 키', modelRow: 'Claude 모델', defaultModel: 'claude-haiku-5-5',
+    suggested: ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'] }
 };
+var PROVIDER_KEYS = ['gemini', 'openai', 'claude'];
 var SETTINGS_ROWS = [
   ['AI 제공자',      'gemini',       '어느 AI로 피드백을 만들지 고릅니다: gemini / openai / claude 중 하나. 고른 제공자의 키·모델 칸만 채우면 됩니다. (교사 화면 → AI 연결 테스트로 확인)'],
   ['Gemini API 키',  '',             'Google AI Studio(aistudio.google.com)에서 발급한 키를 붙여 넣으세요. 이 시트는 교사만 보므로 학생에게 노출되지 않습니다.'],
@@ -595,6 +600,7 @@ function setupSettingsSheet_(ss) {
   if (sh.getLastRow() === 0) {
     sh.getRange(1, 1, 1, 3).setValues([['항목', '값', '안내']]);
     sh.getRange(2, 1, SETTINGS_ROWS.length, 3).setValues(SETTINGS_ROWS);
+    applySettingsValidation_(sh, null);
   } else {
     ensureSettingsRows_(sh);
   }
@@ -614,12 +620,39 @@ function ensureSettingsRows_(sh) {
   var have = {};
   if (last >= 2) sh.getRange(2, 1, last - 1, 1).getValues().forEach(function (r) { have[String(r[0] || '').trim()] = true; });
   var missing = SETTINGS_ROWS.filter(function (r) { return !have[r[0]]; });
-  if (!missing.length) return false;
-  sh.getRange(last + 1, 1, missing.length, 3).setValues(missing);
-  sh.getRange(last + 1, 2, missing.length, 1).setBackground(YELLOW).setNumberFormat('@');
-  sh.getRange(last + 1, 3, missing.length, 1).setFontColor('#666666').setWrap(true);
-  delete requestCache_.settings;
-  return true;
+  if (missing.length) {
+    sh.getRange(last + 1, 1, missing.length, 3).setValues(missing);
+    sh.getRange(last + 1, 2, missing.length, 1).setBackground(YELLOW).setNumberFormat('@');
+    sh.getRange(last + 1, 3, missing.length, 1).setFontColor('#666666').setWrap(true);
+    delete requestCache_.settings;
+  }
+  applySettingsValidation_(sh, null);
+  return missing.length > 0;
+}
+
+// 설정 시트 드롭다운: AI 제공자는 목록만 허용, 모델 칸은 추천 목록 + 직접 입력 허용(경고만)
+// modelLists: {provider: [model ids]} 를 주면 그 제공자의 모델 드롭다운 목록을 갱신
+function applySettingsValidation_(sh, modelLists) {
+  var last = sh.getLastRow();
+  if (last < 2) return;
+  var labels = sh.getRange(2, 1, last - 1, 1).getValues().map(function (r) { return String(r[0] || '').trim(); });
+  function rowOf(label) { var i = labels.indexOf(label); return i < 0 ? -1 : i + 2; }
+  try {
+    var r = rowOf('AI 제공자');
+    if (r > 0) {
+      sh.getRange(r, 2).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(PROVIDER_KEYS, true).setAllowInvalid(false)
+        .setHelpText('gemini / openai / claude 중 하나를 고르세요.').build());
+    }
+    PROVIDER_KEYS.forEach(function (pk) {
+      var mr = rowOf(PROVIDERS[pk].modelRow);
+      if (mr < 0) return;
+      var list = (modelLists && modelLists[pk] && modelLists[pk].length) ? modelLists[pk] : PROVIDERS[pk].suggested;
+      var cur = String(sh.getRange(mr, 2).getValue() || '').trim();
+      if (cur && list.indexOf(cur) < 0) list = [cur].concat(list);
+      sh.getRange(mr, 2).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(list, true).setAllowInvalid(true)
+        .setHelpText('목록에서 고르거나 직접 입력해도 돼요. 교사 화면의 "모델 목록 가져오기"로 실제 사용 가능한 모델을 확인하세요.').build());
+    });
+  } catch (e) { /* 데이터 검증 미지원 환경(테스트 등) */ }
 }
 
 function setupTableSheet_(ss, name, headers) {
@@ -736,6 +769,7 @@ function route_(action, body) {
     case 'feedback.regenerate':  requireTeacher_(body); return feedbackRegenerate_(body);
     case 'feedback.teacher':     requireTeacher_(body); return feedbackTeacher_(body);
     case 'ai.test':              requireTeacher_(body); return aiTest_();
+    case 'ai.models':            requireTeacher_(body); return aiModels_(body);
 
     default:
       return fail_('알 수 없는 요청입니다: ' + action);
@@ -2134,6 +2168,52 @@ function feedbackTeacher_(body) {
 }
 
 // 교사: AI 연결 테스트 (키·모델 확인)
+// 교사: 입력한 키로 실제 사용 가능한 모델 목록을 조회하고, 설정 시트의 모델 드롭다운을 그 목록으로 갱신
+function aiModels_(body) {
+  var st = getSettings_();
+  var pk = String(body.provider || st.provider);
+  if (!PROVIDERS[pk]) return fail_('알 수 없는 제공자예요.');
+  var key = st.keys[pk];
+  if (!key) return fail_('설정 시트의 "' + PROVIDERS[pk].keyRow + '" 칸이 비어 있어요.');
+  var models = listProviderModels_(pk, key);
+  try { applySettingsValidation_(sheet_(SHEETS.settings), (function () { var o = {}; o[pk] = models; return o; })()); } catch (e) { /* 무시 */ }
+  return ok_({ provider: pk, providerLabel: PROVIDERS[pk].label, current: st.models[pk], models: models });
+}
+
+function listProviderModels_(pk, key) {
+  var url, opt;
+  if (pk === 'gemini') { url = 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=200'; opt = { headers: { 'x-goog-api-key': key }, muteHttpExceptions: true }; }
+  else if (pk === 'openai') { url = 'https://api.openai.com/v1/models'; opt = { headers: { Authorization: 'Bearer ' + key }, muteHttpExceptions: true }; }
+  else { url = 'https://api.anthropic.com/v1/models?limit=100'; opt = { headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' }, muteHttpExceptions: true }; }
+  var res;
+  try { res = UrlFetchApp.fetch(url, opt); } catch (e) { throw new Error('AI 서버에 연결하지 못했어요.'); }
+  var code = res.getResponseCode(), body = res.getContentText();
+  if (code === 401 || code === 403 || code === 400) throw new Error(PROVIDERS[pk].label + ' 키가 올바르지 않아요 (' + code + '). ' + extractApiError_(body));
+  if (code !== 200) throw new Error('모델 목록 조회 오류 (' + code + '): ' + extractApiError_(body));
+  var data; try { data = JSON.parse(body); } catch (e) { throw new Error('모델 목록 응답을 읽을 수 없어요.'); }
+  var ids = [];
+  if (pk === 'gemini') {
+    (data.models || []).forEach(function (m) {
+      var methods = m.supportedGenerationMethods || [];
+      if (methods.indexOf('generateContent') < 0) return;
+      var id = String(m.name || '').replace(/^models\//, '');
+      if (/gemini/.test(id) && !/embedding|image|tts|audio|live|vision-only/.test(id)) ids.push(id);
+    });
+  } else if (pk === 'openai') {
+    (data.data || []).forEach(function (m) {
+      var id = String(m.id || '');
+      if (/^(gpt-|o\d)/.test(id) && !/audio|realtime|transcribe|tts|image|embedding|moderation|search|instruct|codex/.test(id)) ids.push(id);
+    });
+  } else {
+    (data.data || []).forEach(function (m) { if (m.id) ids.push(String(m.id)); });
+  }
+  ids = ids.filter(function (v, i, a) { return a.indexOf(v) === i; }).sort();
+  // 추천 모델을 앞으로
+  var sug = PROVIDERS[pk].suggested;
+  ids.sort(function (a, b) { var ia = sug.indexOf(a), ib = sug.indexOf(b); if (ia < 0) ia = 99; if (ib < 0) ib = 99; return ia - ib || a.localeCompare(b); });
+  return ids;
+}
+
 function aiTest_() {
   var st = getSettings_();
   if (!st.apiKey) return fail_('설정 시트의 "' + PROVIDERS[st.provider].keyRow + '" 칸이 비어 있어요. (AI 제공자: ' + st.provider + ')');

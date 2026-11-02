@@ -17,7 +17,7 @@ function fixture(opts = {}) {
     __slept: [],
     CacheService: { getScriptCache: () => storage(cache) }, PropertiesService: { getScriptProperties: () => storage(props) },
     LockService: { getScriptLock: () => ({ waitLock() { assert.equal(locked, false, 'recursive lock'); locked = true; }, releaseLock() { assert.equal(locked, true); locked = false; } }) },
-    UrlFetchApp: { fetch(url, opt) { const req = JSON.parse(opt.payload); http.push({ url, headers: opt.headers || {}, req }); const r = responder(url, req, http.length); return { getResponseCode: () => r.code, getContentText: () => typeof r.body === 'string' ? r.body : JSON.stringify(r.body) }; } },
+    UrlFetchApp: { fetch(url, opt) { const req = opt.payload ? JSON.parse(opt.payload) : {}; http.push({ url, headers: opt.headers || {}, req }); const r = responder(url, req, http.length); return { getResponseCode: () => r.code, getContentText: () => typeof r.body === 'string' ? r.body : JSON.stringify(r.body) }; } },
     SpreadsheetApp: { flush: () => {}, getActiveSpreadsheet: () => ({ getSheetByName: n => sheet(n) }) }
   };
   let reads = 0;
@@ -155,4 +155,24 @@ test('read cache: submission.get reads each sheet once per request; writes are n
   // 쓰기 요청 뒤 바로 읽기 요청이 최신을 보는지
   f.request('feedback.teacher', { token: f.teacher, submissionId: sub.data.submissionId, teacherNote: '메모', finalLevels: {} });
   assert.equal(f.request('submission.get', { token: f.teacher, submissionId: sub.data.submissionId }).data.submission.feedback.teacherNote, '메모');
+});
+
+test('ai.models: lists usable models per provider from the key, suggested first; validation applied without crashing', () => {
+  const f = fixture({ settings: [['AI 제공자', 'openai'], ['OpenAI API 키', 'sk'], ['Claude API 키', 'sk-ant'], ['Gemini API 키', 'g']], responder: (url) => {
+    if (/openai\.com\/v1\/models/.test(url)) return { code: 200, body: { data: [{ id: 'gpt-5' }, { id: 'gpt-4.1-mini' }, { id: 'gpt-5-mini' }, { id: 'tts-1' }, { id: 'text-embedding-3-small' }, { id: 'gpt-4o-audio-preview' }] } };
+    if (/anthropic\.com\/v1\/models/.test(url)) return { code: 200, body: { data: [{ id: 'claude-sonnet-5-5' }, { id: 'claude-haiku-5-5' }] } };
+    if (/generativelanguage.*\/models\?/.test(url)) return { code: 200, body: { models: [{ name: 'models/gemini-3.8-flash', supportedGenerationMethods: ['generateContent'] }, { name: 'models/gemini-embedding-001', supportedGenerationMethods: ['embedContent'] }, { name: 'models/gemini-3.8-pro', supportedGenerationMethods: ['generateContent'] }] } };
+    return { code: 500, body: {} };
+  } });
+  const o = f.request('ai.models', { token: f.teacher });
+  assert.equal(o.ok, true, JSON.stringify(o)); assert.equal(o.data.provider, 'openai');
+  assert.equal(JSON.stringify(o.data.models), JSON.stringify(['gpt-5-mini', 'gpt-5', 'gpt-4.1-mini']), '추천 순 + 오디오/임베딩 제외');
+  const cl = f.request('ai.models', { token: f.teacher, provider: 'claude' });
+  assert.equal(JSON.stringify(cl.data.models), JSON.stringify(['claude-haiku-5-5', 'claude-sonnet-5-5']));
+  const g = f.request('ai.models', { token: f.teacher, provider: 'gemini' });
+  assert.equal(JSON.stringify(g.data.models), JSON.stringify(['gemini-3.8-flash', 'gemini-3.8-pro']));
+  const f2 = fixture({ settings: [['AI 제공자', 'openai']] });
+  assert.match(f2.request('ai.models', { token: f2.teacher }).error, /OpenAI API 키/);
+  const f3 = fixture({ settings: [['AI 제공자', 'openai'], ['OpenAI API 키', 'bad']], responder: () => ({ code: 401, body: { error: { message: 'nope' } } }) });
+  assert.match(f3.request('ai.models', { token: f3.teacher }).error, /키가 올바르지/);
 });

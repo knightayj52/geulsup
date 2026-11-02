@@ -30,8 +30,8 @@
 (function () {
   'use strict';
 
-  var APP_VERSION = '0.8.0'; // server protocol version
-  var UI_VERSION = '0.8.0';
+  var APP_VERSION = '0.8.1'; // server protocol version
+  var UI_VERSION = '0.8.1';
   var editorLifecycle = null;
   var submissionNavigation = [];
   // 제출글 상세 캐시 (제출ID → 응답). 학생을 오갈 때 다시 받지 않고, 이전/다음 학생은 미리 받아 둡니다
@@ -969,6 +969,21 @@
               .then(function () { setBusy(btnAi, false); });
           } });
           statusBox.appendChild(h('li', {}, [btnAi, aiLine]));
+          // 사용 가능한 모델 목록 (키로 실제 조회 → 설정 시트 드롭다운도 갱신)
+          var modelBox = h('div', { class: 'muted', style: 'margin-top:4px' });
+          var btnModels = h('button', { class: 'small ghost', text: '모델 목록 가져오기', onclick: function () {
+            setBusy(btnModels, true, '조회 중…');
+            teacherApi('ai.models')
+              .then(function (r) {
+                clear(modelBox);
+                modelBox.appendChild(h('div', {}, [h('b', { text: r.providerLabel + ' 사용 가능 모델 ' + r.models.length + '개' }), ' · 지금 설정: ' + r.current + (r.models.indexOf(r.current) < 0 ? ' ⚠️ 목록에 없음 — 설정 시트에서 아래 이름 중 하나로 바꾸세요' : ' ✅')]));
+                modelBox.appendChild(h('div', { class: 'chips', style: 'margin-top:4px' }, r.models.slice(0, 30).map(function (m) { return h('span', { class: 'badge' + (m === r.current ? ' done' : ''), text: m }); })));
+                modelBox.appendChild(h('p', { class: 'hint', text: '설정 시트의 모델 칸 드롭다운이 이 목록으로 갱신됐어요. 목록에 없는 이름도 직접 입력할 수 있지만, 바꾼 뒤엔 AI 연결 테스트로 확인하세요.' }));
+              })
+              .catch(function (e) { clear(modelBox); modelBox.appendChild(h('span', { class: 'bad', text: '❌ ' + e.message })); })
+              .then(function () { setBusy(btnModels, false); });
+          } });
+          statusBox.appendChild(h('li', { style: 'display:block' }, [btnModels, modelBox]));
         }
         if (d.teacher.name || d.teacher.school) {
           statusBox.appendChild(h('li', {}, [h('span', { class: 'muted', text: '👩‍🏫 ' + [d.teacher.school, d.teacher.name].filter(Boolean).join(' · ') })]));
