@@ -31,7 +31,7 @@
   'use strict';
 
   var APP_VERSION = '0.8.2'; // server protocol version (화면 버전은 UI_VERSION)
-  var UI_VERSION = '0.8.3';
+  var UI_VERSION = '0.8.4';
   var editorLifecycle = null;
   var submissionNavigation = [];
   // 제출글 상세 캐시 (제출ID → 응답). 학생을 오갈 때 다시 받지 않고, 이전/다음 학생은 미리 받아 둡니다
@@ -1846,10 +1846,12 @@
     }
 
     var corrections = null;
-    if (fb.corrections && fb.corrections.length) {
+    // 0.8.2 이전에 받은 피드백에 남아 있는 "공백 개수만 다른" 고칠 곳은 화면에서도 숨김
+    var corrItems = (fb.corrections || []).filter(function (x) { return x && String(x.original || '').replace(/\s+/g, ' ').trim() !== String(x.fixed || '').replace(/\s+/g, ' ').trim(); });
+    if (corrItems.length) {
       corrections = h('div', { class: 'fb-block fb-corr' }, [
-        h('h3', { text: '✏️ 고칠 곳 (' + fb.corrections.length + ')' }),
-        h('div', { class: 'corr-list' }, fb.corrections.map(function (x) {
+        h('h3', { text: '✏️ 고칠 곳 (' + corrItems.length + ')' }),
+        h('div', { class: 'corr-list' }, corrItems.map(function (x) {
           return h('div', { class: 'corr' }, [
             h('span', { class: 'corr-kind', text: x.kind }),
             h('span', { class: 'corr-orig', text: x.original }),
